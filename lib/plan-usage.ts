@@ -15,6 +15,7 @@ import {
 import { readCodexOAuthCredentials } from "@/lib/providers/discovery";
 import type { UsageProvider, UsageSnapshot, UsageWindow } from "@/lib/usage-display";
 import { parseCursorUsageBody } from "@/lib/usage-display";
+import { isHostAdmin } from "@/lib/user-access";
 
 export type { UsageProvider, UsageSnapshot, UsageWindow };
 
@@ -107,6 +108,13 @@ function epochMsToIso(value: unknown): string | null {
   if (!Number.isFinite(n) || n <= 0) return null;
   const ms = n > 1e12 ? n : n * 1000; // seconds vs milliseconds
   return new Date(ms).toISOString();
+}
+
+/** Host-level fallbacks (Cursor CLI session, Antigravity CLI token, wrapper
+ * env keys) describe the machine owner's own plans. Only the host admin may
+ * see them; other accounts stay limited to their own connections. */
+function mayUseHostCredentials(ownerId?: string): boolean {
+  return !ownerId || isHostAdmin(ownerId);
 }
 
 /* ---------------- Codex (ChatGPT plan) ---------------- */
@@ -373,10 +381,10 @@ async function fetchZaiUsage(ownerId?: string): Promise<UsageProvider> {
       }
     }
   }
-  if (!ownerId) {
-    const fallbackKey = readWrapperEnvKey(["GLM_API_KEY", "ZAI_API_KEY", "Z_AI_API_KEY"]);
+    const fallbackKey = mayUseHostCredentials(ownerId)
+      ? readWrapperEnvKey(["GLM_API_KEY", "ZAI_API_KEY", "Z_AI_API_KEY"])
+      : undefined;
     if (fallbackKey && !keys.some((item) => item.secret === fallbackKey)) keys.push({ secret: fallbackKey });
-  }
   if (!keys.length) return { ...base, status: "no_auth", error: "no z.ai API key found" };
 
   let lastError = "quota lookup failed";
@@ -463,6 +471,65 @@ export function antigravityCredentialNeedsRefresh(secret: string | undefined, no
   }
 }
 
+const ANTIGRAVITY_OAUTH_CLIENT_ID = process.env.ANTIGRAVITY_OAUTH_CLIENT_ID || "";
+const ANTIGRAVITY_OAUTH_CLIENT_SECRET = process.env.ANTIGRAVITY_OAUTH_CLIENT_SECRET || "";
+
+function antigravityTokenExpired(secret: string, skewMs = 60_000): boolean {
+  try {
+    const parsed = JSON.parse(secret) as { token?: { expiry?: unknown } };
+    const expiry = parsed.token?.expiry;
+    if (typeof expiry !== "string") return false;
+    const ms = Date.parse(expiry);
+    return Number.isFinite(ms) && ms - skewMs <= Date.now();
+  } catch {
+    return false;
+  }
+}
+
+/** Exchange the stored refresh token for a fresh access token.
+ * Antigravity tokens are issued to the Antigravity CLI OAuth client, so the
+ * Gemini CLI client used elsewhere in Metis is rejected with unauthorized_client. */
+async function refreshAntigravityToken(secret: string): Promise<string | null> {
+  let parsed: { token?: Record<string, unknown> } & Record<string, unknown>;
+  try {
+    parsed = JSON.parse(secret) as { token?: Record<string, unknown> };
+  } catch {
+    return null;
+  }
+  const refreshToken = parsed.token?.refresh_token;
+  if (typeof refreshToken !== "string" || !refreshToken.trim()) return null;
+  if (!ANTIGRAVITY_OAUTH_CLIENT_ID || !ANTIGRAVITY_OAUTH_CLIENT_SECRET) return null;
+  try {
+    const res = await fetch("https://oauth2.googleapis.com/token", {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({
+        client_id: ANTIGRAVITY_OAUTH_CLIENT_ID,
+        client_secret: ANTIGRAVITY_OAUTH_CLIENT_SECRET,
+        refresh_token: refreshToken,
+        grant_type: "refresh_token",
+      }),
+      signal: AbortSignal.timeout(15_000),
+    });
+    if (!res.ok) return null;
+    const body = (await res.json()) as { access_token?: unknown; expires_in?: unknown };
+    if (typeof body.access_token !== "string" || !body.access_token.trim()) return null;
+    const lifetime = typeof body.expires_in === "number" && Number.isFinite(body.expires_in)
+      ? body.expires_in * 1000
+      : 3_600_000;
+    return JSON.stringify({
+      ...parsed,
+      token: {
+        ...parsed.token,
+        access_token: body.access_token,
+        expiry: new Date(Date.now() + lifetime).toISOString(),
+      },
+    });
+  } catch {
+    return null;
+  }
+}
+
 /** Ask the official Antigravity CLI to refresh its own token file without
  * starting a model turn. `agy models` performs authenticated model discovery,
  * which exercises the same automatic token refresh used by normal CLI runs. */
@@ -523,23 +590,17 @@ async function fetchAntigravityUsage(ownerId?: string): Promise<UsageProvider> {
       }
     }
 
- } else {
+  }
+
+  if (mayUseHostCredentials(ownerId)) {
     try {
       addCredential(readFileSync(`${HOME}/.gemini/antigravity-cli/antigravity-oauth-token`, "utf8"));
     } catch {
-      /* no unscoped CLI token */
+      /* no local CLI token */
     }
   }
 
-  // The CLI may have refreshed its host-scoped token after the account
- // connection was stored. Use it as a fallback for the local Metis user.
- try {
- addCredential(readFileSync(`${HOME}/.gemini/antigravity-cli/antigravity-oauth-token`, "utf8"));
- } catch {
- /* no local CLI token */
- }
-
- if (!credentials.length) return { ...base, status: "no_auth", error: "no authenticated Antigravity connection" };
+  if (!credentials.length) return { ...base, status: "no_auth", error: "no authenticated Antigravity connection" };
 
   const readQuota = async (token: string) => {
     const controller = new AbortController();
@@ -567,28 +628,26 @@ async function fetchAntigravityUsage(ownerId?: string): Promise<UsageProvider> {
   for (const credential of credentials) {
     try {
       let secret = credential.secret;
-      let token = antigravityAccessToken(secret)!;
-
-      const refreshCredential = async () => {
-        if (!ownerId || !credential.connectionId) return false;
-        const refreshed = await refreshAntigravityCredential(secret);
-        if (!refreshed || refreshed === secret) return false;
-        secret = refreshed;
-        token = antigravityAccessToken(secret)!;
-        updateProviderConnection(credential.connectionId, ownerId, { secret, enabled: true });
-        return true;
+      const persist = (next: string) => {
+        secret = next;
+        if (ownerId && credential.connectionId) {
+          updateProviderConnection(credential.connectionId, ownerId, { secret: next, enabled: true });
+        }
       };
-
-      // Do not first spend a network round-trip on a token we already know is
-      // expired. `agy models` only refreshes account metadata; it does not run a
-      // model and therefore consumes no LLM tokens/quota.
-      if (antigravityCredentialNeedsRefresh(secret)) {
-        await refreshCredential();
+      if (antigravityTokenExpired(secret)) {
+        const refreshed = await refreshAntigravityToken(secret);
+        if (refreshed) persist(refreshed);
       }
-
+      let token = antigravityAccessToken(secret)!;
       let res = await readQuota(token);
-      if ((res.status === 401 || res.status === 403) && await refreshCredential()) {
-        res = await readQuota(token);
+      if (res.status === 401 || res.status === 403) {
+        const refreshed =
+          (await refreshAntigravityToken(secret)) || (await refreshAntigravityCredential(secret));
+        if (refreshed && refreshed !== secret) {
+          persist(refreshed);
+          token = antigravityAccessToken(secret)!;
+          res = await readQuota(token);
+        }
       }
       if (!res.ok) {
         lastError = `HTTP ${res.status}`;
@@ -723,23 +782,58 @@ function decodeJwtSub(token: string): string | null {
   if (parts.length < 2) return null;
   try {
     const json = Buffer.from(parts[1].replace(/-/g, "+").replace(/_/g, "/"), "base64").toString("utf8");
-    const payload = JSON.parse(json) as { sub?: unknown };
+    const payload = JSON.parse(json) as { sub?: unknown; exp?: unknown };
     return typeof payload.sub === "string" && payload.sub ? payload.sub : null;
   } catch {
     return null;
   }
 }
 
-function readCursorAppSession(): string | undefined {
-  const envToken = process.env.CURSOR_SESSION_TOKEN || process.env.WORKOS_CURSOR_SESSION_TOKEN;
-  if (envToken?.trim()) return envToken.trim();
+function jwtExpiryIso(token: string): string | null {
+  const parts = token.split(".");
+  if (parts.length < 2) return null;
+  try {
+    const json = Buffer.from(parts[1].replace(/-/g, "+").replace(/_/g, "/"), "base64").toString("utf8");
+    const payload = JSON.parse(json) as { exp?: unknown };
+    const n = typeof payload.exp === "number" ? payload.exp : Number(payload.exp);
+    if (!Number.isFinite(n) || n <= 0) return null;
+    return new Date(n > 1e12 ? n : n * 1000).toISOString();
+  } catch {
+    return null;
+  }
+}
+
+/** Every Cursor session token this host can see, newest source first.
+ * The dashboard quota endpoint only accepts a browser/CLI session cookie;
+ * `crsr_` API keys authenticate the REST API but carry no plan usage. */
+function readCursorSessionTokens(): string[] {
+  const tokens: string[] = [];
+  const add = (value: unknown) => {
+    if (typeof value !== "string" || !value.trim()) return;
+    const token = value.trim();
+    if (!tokens.includes(token)) tokens.push(token);
+  };
+  add(process.env.CURSOR_SESSION_TOKEN || process.env.WORKOS_CURSOR_SESSION_TOKEN);
   const home = homedir();
-  const candidates = [
+  for (const file of [
+    path.join(home, ".config/cursor/auth.json"),
+    path.join(home, ".cursor/auth.json"),
+    path.join(home, "Library/Application Support/cursor/auth.json"),
+    path.join(home, "AppData/Roaming/cursor/auth.json"),
+  ]) {
+    if (!existsSync(file)) continue;
+    try {
+      const parsed = JSON.parse(readFileSync(file, "utf8")) as { accessToken?: unknown };
+      add(parsed.accessToken);
+    } catch {
+      /* try the next CLI credential file */
+    }
+  }
+  for (const file of [
     path.join(home, ".config/Cursor/User/globalStorage/state.vscdb"),
     path.join(home, "Library/Application Support/Cursor/User/globalStorage/state.vscdb"),
     path.join(home, "AppData/Roaming/Cursor/User/globalStorage/state.vscdb"),
-  ];
-  for (const file of candidates) {
+  ]) {
     if (!existsSync(file)) continue;
     try {
       const db = new DatabaseSync(`file:${file}?mode=ro`, { open: true });
@@ -747,19 +841,19 @@ function readCursorAppSession(): string | undefined {
         | { value?: string }
         | undefined;
       db.close();
-      if (typeof row?.value === "string" && row.value.trim()) return row.value.trim();
+      add(row?.value);
     } catch {
       /* try next path */
     }
   }
-  return undefined;
+  return tokens;
 }
 
 async function cursorFetchJson(url: string, token: string): Promise<unknown> {
   const sub = decodeJwtSub(token);
   const cookie = sub ? `${sub}::${token}` : token;
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 5_000);
+  const timer = setTimeout(() => controller.abort(), 10_000);
   try {
     const res = await fetch(url, {
       headers: {
@@ -791,9 +885,8 @@ async function fetchCursorUsage(ownerId?: string): Promise<UsageProvider> {
       }
     }
   }
-  if (!ownerId) {
-    const session = readCursorAppSession();
-    if (session && !tokens.some((item) => item.token === session)) tokens.push({ token: session });
+  for (const session of mayUseHostCredentials(ownerId) ? readCursorSessionTokens() : []) {
+    if (!tokens.some((item) => item.token === session)) tokens.push({ token: session });
   }
 
   if (!tokens.length) return { ...base, status: "no_auth" };
@@ -803,17 +896,25 @@ async function fetchCursorUsage(ownerId?: string): Promise<UsageProvider> {
     "https://cursor.com/api/usage-summary",
     "https://www.cursor.com/api/usage-summary",
   ];
-  for (const credential of tokens) {
+  const ordered = [...tokens].sort((a, b) => Number(Boolean(a.apiKeyOnly)) - Number(Boolean(b.apiKeyOnly)));
+  for (const credential of ordered) {
     if (credential.apiKeyOnly) continue;
     for (const url of urls) {
       try {
         const body = await cursorFetchJson(url, credential.token);
         const parsed = parseCursorUsageBody(body);
-        if (parsed) return {
-          ...base,
-          ...(credential.connectionId ? { connectionId: credential.connectionId } : {}),
-          ...parsed,
-        };
+        if (parsed) {
+          const sessionExpiresAt = jwtExpiryIso(credential.token);
+          return {
+            ...base,
+            ...(credential.connectionId ? { connectionId: credential.connectionId } : {}),
+            ...parsed,
+            extra: {
+              ...parsed.extra,
+              ...(sessionExpiresAt ? { sessionExpiresAt } : {}),
+            },
+          };
+        }
         lastError = "unsupported usage payload";
       } catch (error) {
         lastError = error instanceof Error ? error.message : "fetch failed";

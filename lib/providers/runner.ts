@@ -399,7 +399,8 @@ export async function runAlternativeProviderJob(
       createdAt: new Date().toISOString(),
     });
     checkpoint();
-    const measuredInputTokens = result.usage?.inputTokens;
+    const measuredInputTokens =
+      result.usage?.inputTokens ?? result.usage?.totalProcessedTokens;
     const inputTokens =
       measuredInputTokens ??
       estimateProviderInputTokens(chat, job, parsed.modelId);
@@ -409,16 +410,23 @@ export async function runAlternativeProviderJob(
       selectedModel || { id: parsed.modelId, providerId: definition.key },
       job.modelParams?.length ? job.modelParams : chat.modelParams,
     );
-    const contextWindow = result.usage?.maxTokens ?? selectedContextWindow;
-    const contextWindowSource = result.usage?.maxTokens
+    const runtimeWindow =
+      typeof result.usage?.maxTokens === "number" && result.usage.maxTokens >= 32_768
+        ? result.usage.maxTokens
+        : undefined;
+    const contextWindow = runtimeWindow ?? selectedContextWindow;
+    const contextWindowSource = runtimeWindow
       ? "runtime" as const
-      : selectedModel?.contextWindowSource || (selectedContextWindow ? "inferred" as const : undefined);
-    const contextUsedTokens = result.usage?.usedTokens ?? inputTokens;
+      : selectedModel?.contextWindowSource || (selectedContextWindow ? "catalog" as const : undefined);
+    const contextUsedTokens =
+      result.usage?.usedTokens ??
+      result.usage?.totalProcessedTokens ??
+      inputTokens;
     if (contextUsedTokens || contextWindow) {
       emit("context", {
         usedTokens: contextUsedTokens,
         maxTokens: contextWindow,
-        source: result.usage?.maxTokens ? "provider" : measuredInputTokens !== undefined ? "provider" : "estimate",
+        source: runtimeWindow ? "provider" : measuredInputTokens !== undefined ? "provider" : "estimate",
         inputTokens: result.usage?.inputTokens,
         outputTokens: result.usage?.outputTokens,
         cachedInputTokens: result.usage?.cachedInputTokens,

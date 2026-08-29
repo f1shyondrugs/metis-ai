@@ -90,6 +90,22 @@ test("compaction triggers at exactly 80% of the actual context window", () => {
   assert.equal(atEvents[0]?.id, atEvents.at(-1)?.id);
 });
 
+test("measured provider usage forces compaction below the transcript estimate", () => {
+  const events: Array<Record<string, unknown>> = [];
+  compactProviderMessages(
+    [
+      { role: "user", content: "hello" },
+      { role: "assistant", content: "hi" },
+    ],
+    10_000,
+    "normal",
+    (event) => events.push(event),
+    8_000,
+  );
+  assert.equal(events[0]?.status, "started");
+  assert.equal(events.at(-1)?.status, "completed");
+});
+
 test("compaction emits a structured start and completion event", () => {
   const events: Array<Record<string, unknown>> = [];
   compactProviderMessages(toolHistory, 4_000, "normal", (event) => events.push(event));

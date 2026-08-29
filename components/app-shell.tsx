@@ -1051,7 +1051,7 @@ function runMatchesModel(
 ) {
   if (typeof run.modelId !== "string" || !run.modelId) return false;
   if (run.providerId && run.providerId !== selection.providerKey) return false;
-  if (run.connectionId && run.connectionId !== selection.connectionId) return false;
+  if (run.connectionId && selection.connectionId && run.connectionId !== selection.connectionId) return false;
   const runModelId = parseModelKey(run.modelId).modelId;
   return runModelId === selection.modelId || run.modelId === selection.modelId;
 }
@@ -7348,18 +7348,17 @@ export default function AppShell({ defaultCwd }: { defaultCwd: string }) {
         contextWindow: contextWindowForModel({ id: selectedKey.modelId || modelId, displayName }),
       } satisfies ModelInfo;
     })();
-  const latestUsage = [...messages]
+  const measuredRuns = [...messages]
     .reverse()
-    .find((message) =>
+    .filter((message) =>
       message.role === "assistant" &&
       (typeof message.runMetadata?.contextUsedTokens === "number" ||
-        typeof message.runMetadata?.inputTokens === "number") &&
-      runMatchesModel(message.runMetadata, selectedKey),
+        typeof message.runMetadata?.totalProcessedTokens === "number" ||
+        typeof message.runMetadata?.inputTokens === "number"),
     )
-    ?.runMetadata;
-  // Keep the fallback's serialization/token ratio aligned with the runner.
-  // The UI cannot reproduce provider instructions or runner compaction exactly,
-  // but it can use the same shared estimator for the visible transcript shape.
+    .map((message) => message.runMetadata!);
+  const selectedRunUsage = measuredRuns.find((run) => runMatchesModel(run, selectedKey));
+  const latestUsage = selectedRunUsage || measuredRuns[0];
   const estimatedContextTokens = messages.reduce(
     (total, message) =>
       total + estimateContextTokens({
@@ -7369,12 +7368,16 @@ export default function AppShell({ defaultCwd }: { defaultCwd: string }) {
       }),
     0,
   );
-  const contextUsed = latestUsage?.contextUsedTokens ?? latestUsage?.inputTokens ?? estimatedContextTokens;
+  const contextUsed = latestUsage?.contextUsedTokens
+    ?? latestUsage?.totalProcessedTokens
+    ?? latestUsage?.inputTokens
+    ?? estimatedContextTokens;
   const contextTotal = resolveContextTotal(
-    latestUsage?.contextWindow ?? contextWindowForSelection(selectedModel, modelParams),
+    latestUsage?.contextWindow ?? selectedModel.contextWindow ?? contextWindowForSelection(selectedModel, modelParams),
     contextUsed,
   );
   const contextEstimated = latestUsage?.contextUsedTokens === undefined
+    && latestUsage?.totalProcessedTokens === undefined
     && (latestUsage?.inputTokensEstimated ?? latestUsage?.inputTokens === undefined);
   const contextModelMaximum = contextWindowForModel(selectedModel);
   const contextSelection = contextSelectionLabel(selectedModel, modelParams);
@@ -7384,8 +7387,14 @@ export default function AppShell({ defaultCwd }: { defaultCwd: string }) {
     providerId: selectedModel.providerId,
     providerName: selectedModel.providerName,
     connectionLabel: selectedModel.connectionLabel,
+    connectionId: selectedKey.connectionId || selectedModel.connectionId,
     modelId: selectedKey.modelId || selectedModel.id,
   });
+  const usageSelectionKey = `${selectedModel.providerId || ""}|${selectedKey.connectionId || ""}|${selectedKey.modelId || ""}`;
+  useEffect(() => {
+    if (!authed) return;
+    void refreshPlanUsage(true);
+  }, [authed, usageSelectionKey, busy, refreshPlanUsage]);
   const selectedUsageProviderName =
     selectedModel.connectionLabel ||
     selectedModel.providerName ||

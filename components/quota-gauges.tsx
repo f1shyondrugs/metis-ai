@@ -2,10 +2,12 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { RefreshCw } from "lucide-react";
+import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import {
   formatResetAt,
+  lowQuotaAlerts,
   matchUsageProvider,
   percentLeft,
   selectPrimaryUsageWindow,
@@ -282,6 +284,16 @@ export function PlanUsagePanel({
           <RefreshCw className={cn("size-3.5", refreshing && "animate-spin")} />
         </button>
       </div>
+      {lowQuotaAlerts(snapshot).length ? (
+        <div className="text-xs text-muted-foreground">
+          {lowQuotaAlerts(snapshot).map((alert) => (
+            <p key={`${alert.providerKey}:${alert.windowLabel}`}>
+              {alert.providerName}: {alert.remainingPct.toFixed(0)}% left on {alert.windowLabel}
+              {alert.resetsAt ? ` · resets in ${formatResetAt(alert.resetsAt) || "pending"}` : ""}.
+            </p>
+          ))}
+        </div>
+      ) : null}
       {!snapshot || (snapshot.refreshing && quotaProviders.length === 0) ? (
         <div className="py-2 text-xs text-muted-foreground">Loading provider limits…</div>
       ) : (
@@ -392,6 +404,24 @@ export function usePlanUsageSnapshot(enabled = true) {
       }
     };
   }, [enabled]);
+
+  useEffect(() => {
+    if (!enabled || !snapshot) return;
+    const day = new Date().toISOString().slice(0, 10);
+    for (const alert of lowQuotaAlerts(snapshot)) {
+      const id = `metis-quota-alert:${alert.providerKey}:${alert.windowLabel}:${day}`;
+      try {
+        if (typeof sessionStorage !== "undefined" && sessionStorage.getItem(id)) continue;
+        sessionStorage?.setItem(id, "1");
+      } catch {
+        /* private mode / SSR */
+      }
+      const reset = formatResetAt(alert.resetsAt);
+      toast.warning(`${alert.providerName} quota is low`, {
+        description: `${alert.remainingPct.toFixed(0)}% left on ${alert.windowLabel}${reset ? ` · resets in ${reset}` : ""}`,
+      });
+    }
+  }, [enabled, snapshot]);
 
   const refresh = useCallback(async (force = false) => {
     await loadSharedPlanUsage(force);

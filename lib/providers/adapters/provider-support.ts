@@ -43,6 +43,7 @@ import {
   CONTEXT_COMPACT_RATIO,
   effectiveContextBudget,
   estimateContextTokens,
+  lastMeasuredInputTokens,
   type ContextMode,
   contextWindowForSelection,
 } from "@/lib/context-window";
@@ -418,6 +419,7 @@ export function compactChatHistoryForPrompt(
     contextMode?: ContextMode;
     onCompaction?: (event: CompactionEvent) => void;
     maxChars?: number;
+    measuredTokens?: number;
   } = {},
 ): { text: string; compacted: boolean } {
   const messages = chatToModelMessages(chat, options.excludeMessageId);
@@ -430,6 +432,7 @@ export function compactChatHistoryForPrompt(
       if (event.status === "completed") compacted = true;
       options.onCompaction?.(event);
     },
+    options.measuredTokens ?? lastMeasuredInputTokens(chat),
   );
   let text = serializeModelMessagesForPrompt(next);
   const maxChars = options.maxChars ?? 120_000;
@@ -450,7 +453,13 @@ export function modelMessages(
   if (!messages.some((message) => message.role === "user")) {
     messages.push({ role: "user", content: job.message || "respond." });
   }
-  return compactIfNeeded(messages, contextWindow, contextMode, onCompaction);
+  return compactIfNeeded(
+    messages,
+    contextWindow,
+    contextMode,
+    onCompaction,
+    lastMeasuredInputTokens(chat),
+  );
 }
 
 export function effectiveModelParams(chat: Chat, job: AgentJob) {
@@ -615,6 +624,7 @@ export function compactIfNeeded(
   contextWindow?: number,
   contextMode: ContextMode = "normal",
   onCompaction?: (event: CompactionEvent) => void,
+  measuredTokens?: number,
 ): ModelMessage[] {
   if (!contextWindow || contextWindow <= 0 || messages.length < 2)
     return messages;
@@ -623,7 +633,13 @@ export function compactIfNeeded(
     0,
   );
   const budget = effectiveContextBudget(contextWindow, contextMode);
-  if (total / contextWindow < CONTEXT_COMPACT_RATIO) return messages;
+  const measured =
+    typeof measuredTokens === "number" && Number.isFinite(measuredTokens) && measuredTokens > 0
+      ? measuredTokens
+      : undefined;
+  const estimatePressure = total / contextWindow >= CONTEXT_COMPACT_RATIO;
+  const measuredPressure = Boolean(measured && measured / contextWindow >= CONTEXT_COMPACT_RATIO);
+  if (!estimatePressure && !measuredPressure) return messages;
   // One compact per pressure wave. A recap is already canonical; compacting it
   // again would drop the tail and break idempotency on the next runner step.
   if (
@@ -757,8 +773,9 @@ export function compactProviderMessages(
   contextWindow: number,
   contextMode: ContextMode = "normal",
   onCompaction?: (event: CompactionEvent) => void,
+  measuredTokens?: number,
 ): ModelMessage[] {
-  return compactIfNeeded(messages, contextWindow, contextMode, onCompaction);
+  return compactIfNeeded(messages, contextWindow, contextMode, onCompaction, measuredTokens);
 }
 
 export function codexReasoningEffortForSelection(
@@ -1310,6 +1327,8 @@ export async function consumeAiStream(
       conversation,
       resolvedContextWindow(context),
       contextModeOf(effectiveModelParams(context.chat, context.job)),
+      undefined,
+      lastMeasuredInputTokens(context.chat),
     );
     current = resumeEmbedded(compactedConversation, remainingSteps);
   }

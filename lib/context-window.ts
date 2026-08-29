@@ -288,11 +288,26 @@ export function formatContextWindow(tokens: number | undefined | null): string {
 }
 
 export function lastMeasuredInputTokens(
-  chat: { messages?: Array<{ runMetadata?: { inputTokens?: number } }> } | null | undefined,
+  chat: {
+    contextUsedTokens?: number;
+    messages?: Array<{
+      runMetadata?: {
+        inputTokens?: number;
+        contextUsedTokens?: number;
+        totalProcessedTokens?: number;
+      };
+    }>;
+  } | null | undefined,
 ): number | undefined {
+  const fromChat = chat?.contextUsedTokens;
+  if (typeof fromChat === "number" && Number.isFinite(fromChat) && fromChat > 0) return fromChat;
   const messages = chat?.messages || [];
   for (let index = messages.length - 1; index >= 0; index -= 1) {
-    const tokens = messages[index]?.runMetadata?.inputTokens;
+    const meta = messages[index]?.runMetadata;
+    const tokens =
+      meta?.contextUsedTokens ??
+      meta?.totalProcessedTokens ??
+      meta?.inputTokens;
     if (typeof tokens === "number" && Number.isFinite(tokens) && tokens > 0) return tokens;
   }
   return undefined;

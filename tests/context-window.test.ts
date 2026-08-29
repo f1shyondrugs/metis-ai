@@ -9,6 +9,7 @@ import {
   inferContextWindow,
   resolveContextTotal,
   formatContextWindow,
+  lastMeasuredInputTokens,
 } from "../lib/context-window";
 
 test("contextWindowOf reads nested provider fields", () => {
@@ -98,4 +99,17 @@ test("current GPT-5 family fallbacks keep long-context and mini variants distinc
   assert.equal(contextWindowForSelection({ id: "gpt-5.5", providerId: "codex" }), 1_050_000);
   assert.equal(contextWindowForSelection({ id: "gpt-5.4-mini", providerId: "codex" }), 400_000);
   assert.equal(formatContextWindow(1_050_000), "1.05M");
+});
+
+test("lastMeasuredInputTokens prefers contextUsedTokens over estimates", () => {
+  assert.equal(lastMeasuredInputTokens({
+    messages: [
+      { runMetadata: { inputTokens: 10 } },
+      { runMetadata: { inputTokens: 20, contextUsedTokens: 90_000 } },
+    ],
+  }), 90_000);
+  assert.equal(lastMeasuredInputTokens({
+    contextUsedTokens: 12_000,
+    messages: [{ runMetadata: { inputTokens: 3 } }],
+  }), 12_000);
 });
