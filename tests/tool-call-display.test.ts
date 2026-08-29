@@ -110,13 +110,13 @@ test("layoutAssistantParts starts a new tool group after text, todos, and other 
   ]);
   assert.deepEqual(
     blocks.map((block) => block.type),
-    ["tools", "text", "tools", "text", "tools"],
+    ["tools", "text", "tools", "tools", "text", "tools"],
   );
   assert.deepEqual(
     blocks
       .filter((block) => block.type === "tools")
       .map((block) => block.type === "tools" ? block.tools.map((tool) => tool.id) : []),
-    [["1", "2"], ["3", "4", "5"], ["6"]],
+    [["1", "2"], ["3"], ["4", "5"], ["6"]],
   );
 });
 
@@ -368,19 +368,23 @@ test("layoutAssistantParts attaches thinking to the following tool group", () =>
  }
 });
 
-test("layoutAssistantParts keeps thinking across todos for the following tools", () => {
+test("layoutAssistantParts keeps todos visible outside the following tool activity", () => {
   const blocks = layoutAssistantParts<LayoutTool>([
     { type: "thinking", content: "plan next steps", done: true, durationMs: 3000 },
     { type: "tool", id: "1", name: "write_todos", kind: "todo", status: "completed" },
     { type: "tool", id: "2", name: "read_file", kind: "read", status: "completed" },
     { type: "tool", id: "3", name: "list_directory", kind: "read", status: "completed" },
   ]);
- assert.equal(blocks.length, 1);
- assert.equal(blocks[0]?.type, "tools");
- if (blocks[0]?.type === "tools") {
- assert.deepEqual(blocks[0].tools.map((tool) => tool.name), ["write_todos", "read_file", "list_directory"]);
- assert.equal(blocks[0].thinking?.durationMs, 3000);
- }
+  assert.equal(blocks.length, 2);
+  assert.equal(blocks[0]?.type, "tools");
+  assert.equal(blocks[1]?.type, "tools");
+  if (blocks[0]?.type === "tools") {
+    assert.deepEqual(blocks[0].tools.map((tool) => tool.name), ["write_todos"]);
+  }
+  if (blocks[1]?.type === "tools") {
+    assert.deepEqual(blocks[1].tools.map((tool) => tool.name), ["read_file", "list_directory"]);
+    assert.equal(blocks[1].thinking?.durationMs, 3000);
+  }
 });
 
 test("layoutAssistantParts groups memory with following file tools and thinking", () => {
@@ -429,3 +433,16 @@ test("toolGroupLabel counts memory updates", () => {
   );
 });
 
+
+
+test("layoutAssistantParts never folds the latest Tasks state into edit activity", () => {
+  const blocks = layoutAssistantParts<LayoutTool>([
+    { type: "tool", id: "todo", name: "write_todos", kind: "todo", status: "completed", todos: [{ content: "Ship UI" }] },
+    { type: "tool", id: "edit", name: "edit_file", kind: "edit", status: "completed" },
+    { type: "tool", id: "shell", name: "execute_command", kind: "shell", status: "completed" },
+  ]);
+  const toolBlocks = blocks.filter((block) => block.type === "tools");
+  assert.equal(toolBlocks.length, 2);
+  if (toolBlocks[0]?.type === "tools") assert.deepEqual(toolBlocks[0].tools.map((tool) => tool.kind), ["todo"]);
+  if (toolBlocks[1]?.type === "tools") assert.deepEqual(toolBlocks[1].tools.map((tool) => tool.kind), ["edit", "shell"]);
+});

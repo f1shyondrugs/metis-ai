@@ -68,30 +68,45 @@ def _mcp_servers(raw: Any) -> list[Any]:
     return servers
 
 
-async def _stream_text(response: Any) -> None:
-    async for token in response:
-        if token:
-            emit({"type": "text", "text": str(token)})
+async def _stream_response(response: Any) -> None:
+    # Consume the rich stream exactly once so ToolCall and ToolResult events
+    # stay ordered and the Metis timeline can close running tool rows.
+    from google.antigravity.types import Text, Thought, ToolCall, ToolResult
 
-
-async def _stream_tools(response: Any) -> None:
-    async for call in response.tool_calls:
-        emit(
-            {
+    async for chunk in response.chunks:
+        if isinstance(chunk, Text):
+            if chunk.text:
+                emit({"type": "text", "text": str(chunk.text)})
+            continue
+        if isinstance(chunk, Thought):
+            if chunk.text:
+                emit({"type": "thinking", "text": str(chunk.text)})
+            continue
+        if isinstance(chunk, ToolCall):
+            emit({
                 "type": "tool",
-                "id": getattr(call, "id", None),
-                "name": _tool_name(getattr(call, "name", None)),
-                "input": getattr(call, "args", None) or {},
+                "id": chunk.id,
+                "name": _tool_name(chunk.name),
+                "input": chunk.args or {},
                 "status": "running",
-                "server": getattr(call, "server_name", None),
-            }
-        )
-
+                "server": chunk.server_name,
+            })
+            continue
+        if isinstance(chunk, ToolResult):
+            emit({
+                "type": "tool",
+                "id": chunk.id,
+                "name": _tool_name(chunk.name),
+                "result": chunk.result,
+                "error": chunk.error,
+                "status": "error" if chunk.error else "completed",
+                "server": chunk.server_name,
+            })
 
 async def run(payload: dict[str, Any]) -> None:
     try:
         from google.antigravity import Agent, LocalAgentConfig
-        from google.antigravity.types import CapabilitiesConfig
+        from google.antigravity.types import CapabilitiesConfig, SessionContinuationMode
     except Exception as exc:  # pragma: no cover - optional runtime
         emit(
             {
@@ -112,13 +127,33 @@ async def run(payload: dict[str, Any]) -> None:
         os.chdir(cwd)
 
     kwargs: dict[str, Any] = {
-        "capabilities": CapabilitiesConfig(enabled_tools=[], enable_subagents=False),
+        "capabilities": CapabilitiesConfig(
+            enabled_tools=[],
+            enable_subagents=True,
+            max_subagent_depth=2,
+        ),
         "mcp_servers": _mcp_servers(payload.get("mcp_servers")),
     }
     if cwd:
         kwargs["workspaces"] = [cwd]
     if model:
         kwargs["model"] = model
+
+    conversation_id = str(payload.get("conversation_id") or "").strip()
+    session_dir = str(payload.get("session_dir") or "").strip()
+    if conversation_id:
+        kwargs["conversation_id"] = conversation_id
+        kwargs["session_continuation_mode"] = SessionContinuationMode.CREATE_OR_RESUME
+    else:
+        kwargs["session_continuation_mode"] = SessionContinuationMode.CREATE_ONLY
+    if session_dir:
+        os.makedirs(session_dir, mode=0o700, exist_ok=True)
+        save_dir = os.path.join(session_dir, "sessions")
+        app_data_dir = os.path.join(session_dir, "app-data")
+        os.makedirs(save_dir, mode=0o700, exist_ok=True)
+        os.makedirs(app_data_dir, mode=0o700, exist_ok=True)
+        kwargs["save_dir"] = save_dir
+        kwargs["app_data_dir"] = app_data_dir
 
     api_key = (
         str(payload.get("api_key") or "").strip()
@@ -155,7 +190,18 @@ async def run(payload: dict[str, Any]) -> None:
     config = LocalAgentConfig(**kwargs)
     async with Agent(config) as agent:
         response = await agent.chat(prompt)
-        await asyncio.gather(_stream_text(response), _stream_tools(response))
+        await _stream_response(response)
+        usage = response.usage_metadata
+        if usage is not None:
+            emit({
+                "type": "usage",
+                "input_tokens": usage.prompt_token_count,
+                "cached_tokens": usage.cached_content_token_count,
+                "output_tokens": usage.candidates_token_count,
+                "thinking_tokens": usage.thoughts_token_count,
+                "total_tokens": usage.total_token_count,
+            })
+        emit({"type": "session", "conversation_id": agent.conversation_id})
     emit({"type": "done"})
 
 

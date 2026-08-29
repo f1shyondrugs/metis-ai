@@ -23,6 +23,29 @@ let modules!: Awaited<typeof modulesPromise>;
 
 let chatId = "";
 
+function leaseHeaders(jobId: string) {
+  const workerId = `test-worker-${jobId}`;
+  const leaseToken = randomUUID();
+  const now = new Date();
+  const expiresAt = new Date(now.getTime() + 60_000).toISOString();
+  const db = modules[6].getDatabase();
+  db.prepare(
+    `INSERT OR IGNORE INTO jobs (id, chat_id, user_id, data, status, updated_at) VALUES (?, ?, NULL, ?, 'running', ?)`,
+  ).run(
+    jobId,
+    chatId,
+    JSON.stringify({ id: jobId, chatId, message: "test lease", status: "running", attempts: 1, revision: 1, createdAt: now.toISOString(), updatedAt: now.toISOString() }),
+    now.toISOString(),
+  );
+  db.prepare(
+    `INSERT OR REPLACE INTO job_leases (job_id, worker_id, lease_token, expires_at, updated_at) VALUES (?, ?, ?, ?, ?)`,
+  ).run(jobId, workerId, leaseToken, expiresAt, now.toISOString());
+  return {
+    "X-AI-Chat-Worker-Id": workerId,
+    "X-AI-Chat-Lease-Token": leaseToken,
+  };
+}
+
 before(() => {
   return modulesPromise.then((resolved) => {
     modules = resolved;
@@ -188,6 +211,7 @@ test("workspace creation is persisted, addressable, and idempotent", async () =>
     "X-AI-Chat-Id": chatId,
     "X-AI-Chat-User-Id": "",
     "X-AI-Chat-Job-Id": "workspace-job",
+    ...leaseHeaders("workspace-job"),
     "Idempotency-Key": "workspace-retry",
   };
   const create = () => POST(new Request("http://localhost/api/internal/mcp-workspace", {
@@ -228,6 +252,7 @@ test("chat keywords are normalized, persisted, and searchable through MCP", asyn
     "X-AI-Chat-Id": chatId,
     "X-AI-Chat-User-Id": "",
     "X-AI-Chat-Job-Id": "keyword-job",
+    ...leaseHeaders("keyword-job"),
   };
   const update = await POST(new Request("http://localhost/api/internal/mcp-chat", {
     method: "POST",

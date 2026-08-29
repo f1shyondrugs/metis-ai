@@ -25,6 +25,7 @@ export async function PATCH(req: Request) {
     modelId?: unknown;
     modelParams?: unknown;
     modelParamsByModel?: unknown;
+    lastModelByProvider?: unknown;
     subagentModelEnabled?: unknown;
     subagentModelId?: unknown;
     draftInput?: unknown;
@@ -75,6 +76,25 @@ export async function PATCH(req: Request) {
                 : [],
             ])
             .filter(([key]) => Boolean(key)),
+        )
+      : undefined;
+  const lastModelByProvider =
+    body.lastModelByProvider &&
+    typeof body.lastModelByProvider === "object" &&
+    !Array.isArray(body.lastModelByProvider)
+      ? Object.fromEntries(
+          Object.entries(body.lastModelByProvider)
+            .filter((entry): entry is [string, string] =>
+              typeof entry[0] === "string" &&
+              typeof entry[1] === "string" &&
+              Boolean(entry[0].trim()) &&
+              Boolean(entry[1].trim()),
+            )
+            .slice(0, 100)
+            .map(([providerId, modelId]) => [
+              providerId.trim().slice(0, 120),
+              modelId.trim().slice(0, 500),
+            ]),
         )
       : undefined;
   const subagentModelId =
@@ -156,6 +176,7 @@ export async function PATCH(req: Request) {
         ...(modelId !== undefined ? { modelId } : {}),
         ...(modelParams !== undefined ? { modelParams } : {}),
         ...(modelParamsByModel !== undefined ? { modelParamsByModel } : {}),
+        ...(lastModelByProvider !== undefined ? { lastModelByProvider } : {}),
         ...(subagentModelId !== undefined ? { subagentModelId } : {}),
         ...(subagentModelEnabled !== undefined ? { subagentModelEnabled } : {}),
         ...(draftInput !== undefined ? { draftInput } : {}),

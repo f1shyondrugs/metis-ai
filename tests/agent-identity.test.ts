@@ -16,14 +16,16 @@ test("identity prompt names Metis AI and the harness", () => {
   assert.match(identity, /metis-ai-e2e/);
 });
 
-test("cursor and provider runners inject the shared identity prompt first", () => {
+test("cursor and provider runtimes inject the shared identity through their canonical prompt builders", () => {
   const worker = readFileSync(path.join(root, "lib", "worker-runner.ts"), "utf8");
-  const provider = readFileSync(path.join(root, "lib", "providers", "runner.ts"), "utf8");
+  const promptContext = readFileSync(path.join(root, "lib", "providers", "prompt-context.ts"), "utf8");
+  const providerSupport = readFileSync(path.join(root, "lib", "providers", "adapters", "provider-support.ts"), "utf8");
   const modes = readFileSync(path.join(root, "lib", "modes.ts"), "utf8");
   assert.match(worker, /import \{ metisAgentIdentity \} from "@\/lib\/agent-identity"/);
-  assert.match(worker, /const prompt = \[\s*metisAgentIdentity\(\),/);
-  assert.match(provider, /import \{ metisAgentIdentity \} from "@\/lib\/agent-identity"/);
-  assert.match(provider, /(?:return|const prompt =) \[\s*metisAgentIdentity\(\),/);
+  assert.match(worker, /metisAgentIdentity\(\),/);
+  assert.match(promptContext, /import \{ metisAgentIdentity \} from "@\/lib\/agent-identity"/);
+  assert.match(promptContext, /return\s+\[[\s\S]*?metisAgentIdentity\(\),/);
+  assert.match(providerSupport, /buildProviderPrompt\(/);
   assert.match(modes, /You are Metis AI, running in the Metis AI harness/);
-  assert.doesNotMatch(provider, /You are a provider inside a private AI chat application/);
+  assert.doesNotMatch(promptContext, /You are a provider inside a private AI chat application/);
 });

@@ -1,0 +1,28 @@
+[Unit]
+Description=Metis AI public Scrapling scraper
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=YOUR_USER
+Group=YOUR_GROUP
+WorkingDirectory=YOUR_INSTALL_DIR
+EnvironmentFile=YOUR_INSTALL_DIR/.env
+EnvironmentFile=-YOUR_INSTALL_DIR/.deploy.env
+Environment=HOME=YOUR_HOME
+Environment=METIS_SCRAPER_HOST=127.0.0.1
+Environment=METIS_SCRAPER_PORT=8890
+ExecStart=YOUR_INSTALL_DIR/.venv-scrapling/bin/python YOUR_INSTALL_DIR/scripts/scrapling-service.py
+Restart=always
+RestartSec=3
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=read-only
+MemoryHigh=256M
+MemoryMax=384M
+TasksMax=64
+
+[Install]
+WantedBy=multi-user.target

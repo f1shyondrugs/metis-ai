@@ -62,7 +62,7 @@ export function SkillsSettings() {
 
  return <section className="flex flex-col gap-4">
  <div><h3 className="flex items-center gap-2 text-sm font-medium"><Puzzle className="size-4" /> Skills</h3>
- <p className="mt-1 text-xs text-muted-foreground">Installed skills from skills-lock.json. Enabled skills are listed in the agent prompt.</p></div>
+ <p className="mt-1 text-xs text-muted-foreground">Installed skills from skills-lock.json. Enabled skills are eligible for automatic per-task routing; matching skills are activated only when relevant.</p></div>
  {error ? <p className="text-xs text-destructive">{error}</p> : null}
  <div className="grid gap-2 rounded-xl border border-border/60 p-3">
  <p className="text-sm font-medium">Add manual skill</p>

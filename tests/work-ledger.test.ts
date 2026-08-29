@@ -69,8 +69,8 @@ test("compactReport summarizes verification outcome", () => {
   ]);
   assert.equal(report.allVerified, false);
   assert.equal(report.verified, 1);
-  assert.match(report.report, /VERIFIED  ok/);
-  assert.match(report.report, /FAILED  bad/);
+  assert.match(report.report, /VERIFIED {2}ok/);
+  assert.match(report.report, /FAILED {2}bad/);
 });
 
 // ---------------------------------------------------------------------------

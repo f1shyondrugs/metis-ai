@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { config } from "@/lib/config";
 import type { GlobalModelSettings } from "@/lib/store";
@@ -26,6 +26,23 @@ function lockPath() {
  return path.join(config.root, "skills-lock.json");
 }
 
+function resolvedSkillPath(id: string, configuredPath: string) {
+ const candidates = [
+ configuredPath,
+ path.join(".agents", "skills", id, "SKILL.md"),
+ path.join("skills", "manual", id, "SKILL.md"),
+ path.join(".cursor", "skills", id, "SKILL.md"),
+ path.join(".claude", "skills", id, "SKILL.md"),
+ ].filter(Boolean);
+ const root = path.resolve(config.root);
+ for (const candidate of candidates) {
+ const absolute = path.resolve(root, candidate);
+ if (absolute !== root && !absolute.startsWith(`${root}${path.sep}`)) continue;
+ if (existsSync(absolute)) return path.relative(root, absolute);
+ }
+ return configuredPath;
+}
+
 export function listInstalledSkills(): SkillRecord[] {
  try {
  const lock = JSON.parse(readFileSync(lockPath(), "utf8")) as SkillsLock;
@@ -33,7 +50,7 @@ export function listInstalledSkills(): SkillRecord[] {
  id,
  source: skill.source || "",
  sourceType: skill.sourceType || "github",
- skillPath: skill.skillPath || "",
+ skillPath: resolvedSkillPath(id, skill.skillPath || ""),
  computedHash: skill.computedHash || "",
  }));
  } catch {

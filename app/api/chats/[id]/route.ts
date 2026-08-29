@@ -60,9 +60,10 @@ export async function PATCH(req: Request, { params }: Params) {
     browserContext?: BrowserContext | null;
     sessionState?: ChatSessionState | null;
     pendingQuestion?: PendingChatQuestion | null;
+    runtimeMode?: string | null;
     badge?: ChatBadge | null;
     touchUpdatedAt?: boolean;
- projectId?: string | null;
+    projectId?: string | null;
   };
   try {
     body = (await req.json()) as {
@@ -73,37 +74,51 @@ export async function PATCH(req: Request, { params }: Params) {
       modelId?: string | null;
       modelParams?: Array<{ id: string; value: string }> | null;
       queuedMessages?: Array<{ id: string; text: string }> | null;
-    pinned?: boolean;
-    archived?: boolean;
+      pinned?: boolean;
+      archived?: boolean;
       canvas?: string | null;
       workspaces?: WorkspaceItem[] | null;
       browserContext?: BrowserContext | null;
       sessionState?: ChatSessionState | null;
       pendingQuestion?: PendingChatQuestion | null;
+      runtimeMode?: string | null;
       badge?: ChatBadge | null;
       touchUpdatedAt?: boolean;
- projectId?: string | null;
+      projectId?: string | null;
     };
   } catch {
     return Response.json({ error: "Invalid JSON body" }, { status: 400 });
   }
 
-  const requestedModelId = typeof body.modelId === "string" ? body.modelId.trim() : "";
+  const requestedModelId =
+    typeof body.modelId === "string" ? body.modelId.trim() : "";
   if (requestedModelId && !isModelAllowed(ownerId, requestedModelId)) {
-    return Response.json({ error: "This model is not available for your account" }, { status: 403 });
+    return Response.json(
+      { error: "This model is not available for your account" },
+      { status: 403 },
+    );
   }
 
   let chat;
   try {
-    chat = updateChat(id, {
-      ...body,
-      // PATCH is used for UI/session metadata. Only message writes should
-      // move a chat in the activity-sorted sidebar.
-      touchUpdatedAt: body.touchUpdatedAt === true,
-    }, ownerId);
+    chat = updateChat(
+      id,
+      {
+        ...body,
+        pendingApproval: undefined,
+        approvedPatterns: undefined,
+        // PATCH is used for UI/session metadata. Only message writes should
+        // move a chat in the activity-sorted sidebar.
+        touchUpdatedAt: body.touchUpdatedAt === true,
+      },
+      ownerId,
+    );
   } catch (error) {
     if (error instanceof Error && error.name === "WorkspaceNameConflict") {
-      return Response.json({ error: "A plan with this name already exists" }, { status: 409 });
+      return Response.json(
+        { error: "A plan with this name already exists" },
+        { status: 409 },
+      );
     }
     throw error;
   }
@@ -111,7 +126,12 @@ export async function PATCH(req: Request, { params }: Params) {
     return Response.json({ error: "Not found" }, { status: 404 });
   }
   const modelSwitch = requestedModelId
-    ? requestJobModelSwitch(id, ownerId, requestedModelId, body.modelParams || undefined)
+    ? requestJobModelSwitch(
+        id,
+        ownerId,
+        requestedModelId,
+        body.modelParams || undefined,
+      )
     : null;
   // Metadata/session PATCHes do not need to send the complete transcript back
   // to the browser. Large chats can contain several megabytes of messages,
@@ -122,7 +142,13 @@ export async function PATCH(req: Request, { params }: Params) {
       messages: [],
     },
     ...(modelSwitch?.pendingModelId
-      ? { modelSwitch: { requested: true, jobId: modelSwitch.id, modelId: modelSwitch.pendingModelId } }
+      ? {
+          modelSwitch: {
+            requested: true,
+            jobId: modelSwitch.id,
+            modelId: modelSwitch.pendingModelId,
+          },
+        }
       : {}),
   });
 }

@@ -465,9 +465,13 @@ function coalesceActivityBlocks<TTool extends { kind?: string }>(
  continue;
  }
  if (block.type === "tools" && last?.type === "tools") {
+ const blockHasStateSurface = block.tools.some((tool) => tool.kind === "plan" || tool.kind === "todo");
+ const lastHasStateSurface = last.tools.some((tool) => tool.kind === "plan" || tool.kind === "todo");
+ if (!blockHasStateSurface && !lastHasStateSurface) {
  last.tools = [...last.tools, ...block.tools];
  last.thinking = mergeBlockThinking(last.thinking, block.thinking);
  continue;
+ }
  }
  out.push(block);
  }

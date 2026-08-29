@@ -440,14 +440,14 @@ export function VoiceInput({
     <div className="flex items-center gap-1">
       {state !== "recording" ? (
         voiceConfigured ? (
-          <Button type="button" size="icon" variant="ghost" className="size-9 shrink-0 rounded-full" onClick={() => void start()} disabled={["permission", "uploading", "transcribing"].includes(state)} aria-label="Record voice input" title="Record voice input">
+          <Button type="button" size="icon" variant="ghost" className="size-11 shrink-0 rounded-full sm:size-9" onClick={() => void start()} disabled={["permission", "uploading", "transcribing"].includes(state)} aria-label="Record voice input" title="Record voice input">
             <Mic className="size-4" />
           </Button>
         ) : (
           <Tooltip>
             <TooltipTrigger asChild>
               <span className="inline-flex" tabIndex={0}>
-                <Button type="button" size="icon" variant="ghost" className="size-9 shrink-0 rounded-full text-muted-foreground/50" disabled aria-label="Voice input requires an API key">
+                <Button type="button" size="icon" variant="ghost" className="size-11 shrink-0 rounded-full text-muted-foreground/50 sm:size-9" disabled aria-label="Voice input requires an API key">
                   <Mic className="size-4" />
                 </Button>
               </span>
@@ -455,7 +455,7 @@ export function VoiceInput({
             <TooltipContent side="top" className="max-w-64 flex-col items-start">
               <span>Richte zuerst den API-Key für Voice ein, bevor du die Voice-Funktion nutzt.</span>
               <button type="button" className="font-medium text-primary-foreground underline underline-offset-2" onClick={onOpenSettings}>
-                Voice-Einstellungen öffnen
+                Open voice settings
               </button>
             </TooltipContent>
           </Tooltip>

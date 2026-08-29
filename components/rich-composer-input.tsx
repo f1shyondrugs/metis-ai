@@ -6,6 +6,7 @@ import {
   useLayoutEffect,
   useRef,
   type ClipboardEvent,
+  type FocusEvent,
   type KeyboardEvent,
 } from "react";
 import { cn } from "@/lib/utils";
@@ -16,6 +17,8 @@ type RichComposerInputProps = {
   onChange: (value: string, cursorPosition: number) => void;
   onKeyDown?: (event: KeyboardEvent<HTMLDivElement>) => void;
   onPaste?: (event: ClipboardEvent<HTMLDivElement>) => void;
+  onFocus?: (event: FocusEvent<HTMLDivElement>) => void;
+  onBlur?: (event: FocusEvent<HTMLDivElement>) => void;
   placeholder?: string;
   className?: string;
   disabled?: boolean;
@@ -104,6 +107,8 @@ export const RichComposerInput = forwardRef<HTMLDivElement, RichComposerInputPro
       onChange,
       onKeyDown,
       onPaste,
+      onFocus,
+      onBlur,
       placeholder,
       className,
       disabled,
@@ -150,6 +155,8 @@ export const RichComposerInput = forwardRef<HTMLDivElement, RichComposerInputPro
         }}
         onKeyDown={onKeyDown}
         onPaste={onPaste}
+        onFocus={onFocus}
+        onBlur={onBlur}
         onClick={(event) => {
           const target = event.target as HTMLElement;
           if (target.closest("[data-composer-link]")) event.preventDefault();

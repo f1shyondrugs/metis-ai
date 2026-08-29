@@ -7,8 +7,10 @@ import {
   readCodexOAuthCredentials,
 } from "../lib/providers/discovery";
 import {
+  antigravityCredentialNeedsRefresh,
   codexWindowLabel,
   normalizeCodexWindow,
+  preserveUsageOnTransientFailure,
   readCodexUsageOAuthCredentials,
 } from "../lib/plan-usage";
 import type { ProviderConnectionWithSecret } from "../lib/provider-connections";
@@ -84,6 +86,28 @@ test("custom discovery normalizes base URLs, auth variants, and model formats", 
   }
 });
 
+
+test("Antigravity quota refreshes expired OAuth credentials before querying quota", () => {
+  const expired = JSON.stringify({
+    token: {
+      access_token: "access-token",
+      refresh_token: "refresh-token",
+      expiry: new Date(Date.now() - 60_000).toISOString(),
+    },
+    auth_method: "consumer",
+  });
+  const healthy = JSON.stringify({
+    token: {
+      access_token: "access-token",
+      refresh_token: "refresh-token",
+      expiry: new Date(Date.now() + 60 * 60_000).toISOString(),
+    },
+    auth_method: "consumer",
+  });
+  assert.equal(antigravityCredentialNeedsRefresh(expired), true);
+  assert.equal(antigravityCredentialNeedsRefresh(healthy), false);
+});
+
 test("Codex quota windows preserve five-hour and weekly reset data", () => {
   assert.equal(codexWindowLabel(300), "5h");
   assert.equal(codexWindowLabel(10080), "weekly");
@@ -103,4 +127,25 @@ test("Codex quota can bootstrap from refreshable OAuth credentials after access 
   const credentials = readCodexUsageOAuthCredentials(codexSecret({ expires: Date.now() - 1 }));
   assert.equal(credentials.refresh, "refresh-token");
   assert.equal(credentials.accountId, "account-1");
+});
+
+
+test("quota refresh keeps the last valid value on transient provider failure", () => {
+  const previous = {
+    key: "zai",
+    name: "z.ai Coding Plan",
+    status: "live" as const,
+    windows: [{ label: "5h", usedPercent: 34, resetsAt: null }],
+  };
+  const next = {
+    key: "zai",
+    name: "z.ai Coding Plan",
+    status: "error" as const,
+    windows: [],
+    error: "fetch failed",
+  };
+  const preserved = preserveUsageOnTransientFailure(previous, next);
+  assert.equal(preserved.status, "stale");
+  assert.equal(preserved.windows[0]?.usedPercent, 34);
+  assert.equal(preserved.error, "fetch failed");
 });

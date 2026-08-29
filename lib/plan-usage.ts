@@ -1,5 +1,6 @@
 import { execFile } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -14,7 +15,6 @@ import {
 import { readCodexOAuthCredentials } from "@/lib/providers/discovery";
 import type { UsageProvider, UsageSnapshot, UsageWindow } from "@/lib/usage-display";
 import { parseCursorUsageBody } from "@/lib/usage-display";
-import { isHostAdmin } from "@/lib/user-access";
 
 export type { UsageProvider, UsageSnapshot, UsageWindow };
 
@@ -34,8 +34,51 @@ export type { UsageProvider, UsageSnapshot, UsageWindow };
  */
 
 const CACHE_TTL_MS = 60_000;
+const PERSISTED_CACHE_MAX_AGE_MS = 7 * 24 * 60 * 60_000;
 const cache = new Map<string, UsageSnapshot>();
 const inflight = new Map<string, Promise<UsageSnapshot>>();
+const PERSISTED_USAGE_DIR = path.join(config.dataDir, "plan-usage-cache");
+
+function usageCacheFile(ownerId?: string) {
+  const key = createHash("sha256").update(ownerId || "global").digest("hex").slice(0, 32);
+  return path.join(PERSISTED_USAGE_DIR, `${key}.json`);
+}
+
+function isUsageSnapshot(value: unknown): value is UsageSnapshot {
+  if (!value || typeof value !== "object") return false;
+  const candidate = value as Partial<UsageSnapshot>;
+  return Array.isArray(candidate.providers) && typeof candidate.fetchedAt === "string";
+}
+
+function loadPersistedUsage(ownerId?: string): UsageSnapshot | null {
+  try {
+    const parsed = JSON.parse(readFileSync(usageCacheFile(ownerId), "utf8")) as unknown;
+    if (!isUsageSnapshot(parsed)) return null;
+    const age = Date.now() - Date.parse(parsed.fetchedAt);
+    if (!Number.isFinite(age) || age < 0 || age > PERSISTED_CACHE_MAX_AGE_MS) return null;
+    return {
+      ...parsed,
+      providers: parsed.providers.map((provider) => ({
+        ...provider,
+        status: provider.status === "live" ? "stale" as const : provider.status,
+      })),
+    };
+  } catch {
+    return null;
+  }
+}
+
+function persistUsage(ownerId: string | undefined, snapshot: UsageSnapshot) {
+  try {
+    mkdirSync(PERSISTED_USAGE_DIR, { recursive: true });
+    const target = usageCacheFile(ownerId);
+    const temporary = `${target}.${process.pid}.tmp`;
+    writeFileSync(temporary, JSON.stringify(snapshot), { mode: 0o600 });
+    renameSync(temporary, target);
+  } catch {
+    // Quota persistence is only a render cache. Never fail a request because of it.
+  }
+}
 
 const HOME = homedir();
 const CODEX_BIN = process.env.CODEX_BIN || path.join(config.root, "node_modules/.bin/codex");
@@ -64,13 +107,6 @@ function epochMsToIso(value: unknown): string | null {
   if (!Number.isFinite(n) || n <= 0) return null;
   const ms = n > 1e12 ? n : n * 1000; // seconds vs milliseconds
   return new Date(ms).toISOString();
-}
-
-/** Host-level fallbacks (Cursor CLI session, Antigravity CLI token, wrapper
- * env keys) describe the machine owner's own plans. Only the host admin may
- * see them; other accounts stay limited to their own connections. */
-function mayUseHostCredentials(ownerId?: string): boolean {
-  return !ownerId || isHostAdmin(ownerId);
 }
 
 /* ---------------- Codex (ChatGPT plan) ---------------- */
@@ -192,7 +228,7 @@ async function fetchCodexUsage(ownerId?: string): Promise<UsageProvider> {
       usageHome.cleanup();
       resolve(provider);
     };
-    const timer = setTimeout(() => done({ ...base, status: "error", error: "timeout" }), 20_000);
+    const timer = setTimeout(() => done({ ...base, status: "error", error: "timeout" }), 8_000);
     try {
       child = execFile(
         CODEX_BIN,
@@ -203,7 +239,7 @@ async function fetchCodexUsage(ownerId?: string): Promise<UsageProvider> {
             ...(usageHome.apiKey ? { CODEX_API_KEY: usageHome.apiKey } : {}),
             CODEX_HOME: usageHome.home,
           },
-          timeout: 18_000,
+          timeout: 7_500,
         },
         () => {
           /* handled via stdout below */
@@ -326,10 +362,7 @@ async function fetchZaiUsage(ownerId?: string): Promise<UsageProvider> {
   const keys: Array<{ secret: string; connectionId?: string }> = [];
   if (ownerId) {
     const candidates = listProviderConnections(ownerId, false)
-      .filter((connection) => {
-        const haystack = `${connection.providerKey} ${connection.slug} ${connection.label} ${connection.baseUrl || ""}`;
-        return /z\.?ai|z-ai|glm|zhipu/i.test(haystack);
-      })
+      .filter((connection) => /z\.?ai|z-ai|glm/i.test(`${connection.label} ${connection.baseUrl || ""}`))
       .sort((a, b) => Number(/coding/i.test(`${b.label} ${b.baseUrl || ""}`)) - Number(/coding/i.test(`${a.label} ${a.baseUrl || ""}`)));
     for (const connection of candidates) {
       try {
@@ -340,34 +373,26 @@ async function fetchZaiUsage(ownerId?: string): Promise<UsageProvider> {
       }
     }
   }
-  const fallbackKey = mayUseHostCredentials(ownerId)
-    ? readWrapperEnvKey(["GLM_API_KEY", "ZAI_API_KEY", "Z_AI_API_KEY"])
-    : undefined;
-  if (fallbackKey && !keys.some((item) => item.secret === fallbackKey)) keys.push({ secret: fallbackKey });
+  if (!ownerId) {
+    const fallbackKey = readWrapperEnvKey(["GLM_API_KEY", "ZAI_API_KEY", "Z_AI_API_KEY"]);
+    if (fallbackKey && !keys.some((item) => item.secret === fallbackKey)) keys.push({ secret: fallbackKey });
+  }
   if (!keys.length) return { ...base, status: "no_auth", error: "no z.ai API key found" };
 
   let lastError = "quota lookup failed";
   for (const credential of keys) {
     try {
-      const headerVariants: Array<Record<string, string>> = [
-        { Authorization: credential.secret, Accept: "application/json" },
-        { Authorization: `Bearer ${credential.secret}`, Accept: "application/json" },
-        { "x-api-key": credential.secret, Accept: "application/json" },
-      ];
-      let res: Response | null = null;
-      for (const headers of headerVariants) {
-        const controller = new AbortController();
-        const timer = setTimeout(() => controller.abort(), 10_000);
-        res = await fetch("https://api.z.ai/api/monitor/usage/quota/limit", {
-          headers,
-          signal: controller.signal,
-        });
-        clearTimeout(timer);
-        if (res.ok) break;
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), 5_000);
+      const res = await fetch("https://api.z.ai/api/monitor/usage/quota/limit", {
+        headers: { Authorization: credential.secret, Accept: "application/json" },
+        signal: controller.signal,
+      });
+      clearTimeout(timer);
+      if (!res.ok) {
         lastError = `HTTP ${res.status}`;
-        res = null;
+        continue;
       }
-      if (!res) continue;
       const body = (await res.json()) as {
         data?: { limits?: ZaiLimit[]; level?: string };
       };
@@ -408,81 +433,33 @@ async function fetchZaiUsage(ownerId?: string): Promise<UsageProvider> {
 
 function antigravityAccessToken(secret: string | undefined): string | null {
   if (!secret?.trim()) return null;
-  const trimmed = secret.trim();
   try {
-    const raw = JSON.parse(trimmed) as { token?: unknown; access_token?: unknown };
-    const nested = raw.token && typeof raw.token === "object"
-      ? (raw.token as { access_token?: unknown }).access_token
-      : undefined;
+    const raw = JSON.parse(secret) as { token?: unknown };
     const token = typeof raw.token === "string"
       ? raw.token
-      : typeof nested === "string"
-        ? nested
-        : typeof raw.access_token === "string"
-          ? raw.access_token
-          : undefined;
+      : raw.token && typeof raw.token === "object"
+        ? (raw.token as { access_token?: unknown }).access_token
+        : undefined;
     return typeof token === "string" && token.trim() ? token.trim() : null;
   } catch {
-    return trimmed.includes("\n") || trimmed.includes(" ") ? null : trimmed;
+    return null;
   }
 }
 
-const ANTIGRAVITY_OAUTH_CLIENT_ID = process.env.ANTIGRAVITY_OAUTH_CLIENT_ID || "";
-const ANTIGRAVITY_OAUTH_CLIENT_SECRET = process.env.ANTIGRAVITY_OAUTH_CLIENT_SECRET || "";
-
-function antigravityTokenExpired(secret: string, skewMs = 60_000): boolean {
+export function antigravityCredentialNeedsRefresh(secret: string | undefined, now = Date.now()) {
+  if (!secret?.trim()) return false;
   try {
-    const parsed = JSON.parse(secret) as { token?: { expiry?: unknown } };
-    const expiry = parsed.token?.expiry;
+    const raw = JSON.parse(secret) as { token?: unknown };
+    if (!raw.token || typeof raw.token !== "object") return false;
+    const expiry = (raw.token as { expiry?: unknown }).expiry;
     if (typeof expiry !== "string") return false;
-    const ms = Date.parse(expiry);
-    return Number.isFinite(ms) && ms - skewMs <= Date.now();
+    const expiresAt = Date.parse(expiry);
+    if (!Number.isFinite(expiresAt)) return false;
+    // Refresh before it is actually unusable. This avoids a guaranteed 401 and
+    // gives the CLI enough time to renew the OAuth token in the background.
+    return expiresAt <= now + 60_000;
   } catch {
     return false;
-  }
-}
-
-/** Exchange the stored refresh token for a fresh access token.
- * Antigravity tokens are issued to the Antigravity CLI OAuth client, so the
- * Gemini CLI client used elsewhere in Metis is rejected with unauthorized_client. */
-async function refreshAntigravityToken(secret: string): Promise<string | null> {
-  let parsed: { token?: Record<string, unknown> } & Record<string, unknown>;
-  try {
-    parsed = JSON.parse(secret) as { token?: Record<string, unknown> };
-  } catch {
-    return null;
-  }
-  const refreshToken = parsed.token?.refresh_token;
-  if (typeof refreshToken !== "string" || !refreshToken.trim()) return null;
-  if (!ANTIGRAVITY_OAUTH_CLIENT_ID || !ANTIGRAVITY_OAUTH_CLIENT_SECRET) return null;
-  try {
-    const res = await fetch("https://oauth2.googleapis.com/token", {
-      method: "POST",
-      headers: { "Content-Type": "application/x-www-form-urlencoded" },
-      body: new URLSearchParams({
-        client_id: ANTIGRAVITY_OAUTH_CLIENT_ID,
-        client_secret: ANTIGRAVITY_OAUTH_CLIENT_SECRET,
-        refresh_token: refreshToken,
-        grant_type: "refresh_token",
-      }),
-      signal: AbortSignal.timeout(15_000),
-    });
-    if (!res.ok) return null;
-    const body = (await res.json()) as { access_token?: unknown; expires_in?: unknown };
-    if (typeof body.access_token !== "string" || !body.access_token.trim()) return null;
-    const lifetime = typeof body.expires_in === "number" && Number.isFinite(body.expires_in)
-      ? body.expires_in * 1000
-      : 3_600_000;
-    return JSON.stringify({
-      ...parsed,
-      token: {
-        ...parsed.token,
-        access_token: body.access_token,
-        expiry: new Date(Date.now() + lifetime).toISOString(),
-      },
-    });
-  } catch {
-    return null;
   }
 }
 
@@ -498,7 +475,7 @@ async function refreshAntigravityCredential(secret: string): Promise<string | nu
     mkdirSync(path.dirname(tokenFile), { recursive: true, mode: 0o700 });
     writeFileSync(tokenFile, secret, { mode: 0o600 });
     await new Promise<void>((resolve) => {
-      execFile(
+      const child = execFile(
         command,
         ["models"],
         {
@@ -509,11 +486,15 @@ async function refreshAntigravityCredential(secret: string): Promise<string | nu
             XDG_CONFIG_HOME: path.join(home, ".config"),
             XDG_CACHE_HOME: path.join(home, ".cache"),
           },
-          timeout: 15_000,
+          timeout: 10_000,
           maxBuffer: 512_000,
         },
         () => resolve(),
       );
+      // agy keeps an async pipe open waiting for stdin even for the non-
+      // interactive `models` command. Explicit EOF lets it finish its OAuth
+      // refresh instead of sitting until Node's timeout kills it.
+      child.stdin?.end();
     });
     const refreshed = readFileSync(tokenFile, "utf8");
     return antigravityAccessToken(refreshed) ? refreshed : null;
@@ -551,20 +532,18 @@ async function fetchAntigravityUsage(ownerId?: string): Promise<UsageProvider> {
   }
 
   // The CLI may have refreshed its host-scoped token after the account
-  // connection was stored. Use it as a fallback for the machine owner only.
-  if (mayUseHostCredentials(ownerId)) {
-    try {
-   addCredential(readFileSync(`${HOME}/.gemini/antigravity-cli/antigravity-oauth-token`, "utf8"));
-    } catch {
-   /* no local CLI token */
-    }
-  }
+ // connection was stored. Use it as a fallback for the local Metis user.
+ try {
+ addCredential(readFileSync(`${HOME}/.gemini/antigravity-cli/antigravity-oauth-token`, "utf8"));
+ } catch {
+ /* no local CLI token */
+ }
 
  if (!credentials.length) return { ...base, status: "no_auth", error: "no authenticated Antigravity connection" };
 
   const readQuota = async (token: string) => {
     const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), 12_000);
+    const timer = setTimeout(() => controller.abort(), 6_000);
     try {
       return await fetch(
         "https://cloudcode-pa.googleapis.com/v1internal:fetchAvailableModels",
@@ -588,26 +567,28 @@ async function fetchAntigravityUsage(ownerId?: string): Promise<UsageProvider> {
   for (const credential of credentials) {
     try {
       let secret = credential.secret;
-      const persist = (next: string) => {
-        secret = next;
-        if (ownerId && credential.connectionId) {
-          updateProviderConnection(credential.connectionId, ownerId, { secret: next, enabled: true });
-        }
-      };
-      if (antigravityTokenExpired(secret)) {
-        const refreshed = await refreshAntigravityToken(secret);
-        if (refreshed) persist(refreshed);
-      }
       let token = antigravityAccessToken(secret)!;
+
+      const refreshCredential = async () => {
+        if (!ownerId || !credential.connectionId) return false;
+        const refreshed = await refreshAntigravityCredential(secret);
+        if (!refreshed || refreshed === secret) return false;
+        secret = refreshed;
+        token = antigravityAccessToken(secret)!;
+        updateProviderConnection(credential.connectionId, ownerId, { secret, enabled: true });
+        return true;
+      };
+
+      // Do not first spend a network round-trip on a token we already know is
+      // expired. `agy models` only refreshes account metadata; it does not run a
+      // model and therefore consumes no LLM tokens/quota.
+      if (antigravityCredentialNeedsRefresh(secret)) {
+        await refreshCredential();
+      }
+
       let res = await readQuota(token);
-      if (res.status === 401 || res.status === 403) {
-        const refreshed =
-          (await refreshAntigravityToken(secret)) || (await refreshAntigravityCredential(secret));
-        if (refreshed && refreshed !== secret) {
-          persist(refreshed);
-          token = antigravityAccessToken(secret)!;
-          res = await readQuota(token);
-        }
+      if ((res.status === 401 || res.status === 403) && await refreshCredential()) {
+        res = await readQuota(token);
       }
       if (!res.ok) {
         lastError = `HTTP ${res.status}`;
@@ -642,8 +623,10 @@ async function fetchAntigravityUsage(ownerId?: string): Promise<UsageProvider> {
       lastError = error instanceof Error ? error.message : "fetch failed";
     }
   }
-  const noAuth = /HTTP 401|HTTP 403/.test(lastError);
-  return { ...base, status: noAuth ? "no_auth" : "error", error: lastError };
+  // Reaching this point means a credential exists. A rejected/expired token is
+  // a refresh error, not "not connected". Reserve no_auth strictly for the
+  // earlier zero-credential branch so the UI never lies about connection state.
+  return { ...base, status: "error", error: lastError };
 }
 
 /* ---------------- Local gateway 5h stats ---------------- */
@@ -736,60 +719,27 @@ function fetchMetisTelemetry5h(): UsageProvider[] {
 /* ---------------- Cursor ---------------- */
 
 function decodeJwtSub(token: string): string | null {
-  const claims = decodeJwtClaims(token);
-  return typeof claims?.sub === "string" && claims.sub ? claims.sub : null;
-}
-
-function decodeJwtClaims(token: string): Record<string, unknown> | null {
   const parts = token.split(".");
   if (parts.length < 2) return null;
   try {
     const json = Buffer.from(parts[1].replace(/-/g, "+").replace(/_/g, "/"), "base64").toString("utf8");
-    const payload = JSON.parse(json) as Record<string, unknown>;
-    return payload && typeof payload === "object" ? payload : null;
+    const payload = JSON.parse(json) as { sub?: unknown };
+    return typeof payload.sub === "string" && payload.sub ? payload.sub : null;
   } catch {
     return null;
   }
 }
 
-function jwtExpiryIso(token: string): string | null {
-  const exp = decodeJwtClaims(token)?.exp;
-  const n = typeof exp === "number" ? exp : Number(exp);
-  if (!Number.isFinite(n) || n <= 0) return null;
-  return new Date(n > 1e12 ? n : n * 1000).toISOString();
-}
-
-/** Every Cursor session token this host can see, newest source first.
- * The dashboard quota endpoint only accepts a browser/CLI session cookie;
- * `crsr_` API keys authenticate the REST API but carry no plan usage. */
-function readCursorSessionTokens(): string[] {
-  const tokens: string[] = [];
-  const add = (value: unknown) => {
-    if (typeof value !== "string" || !value.trim()) return;
-    const token = value.trim();
-    if (!tokens.includes(token)) tokens.push(token);
-  };
-  add(process.env.CURSOR_SESSION_TOKEN || process.env.WORKOS_CURSOR_SESSION_TOKEN);
+function readCursorAppSession(): string | undefined {
+  const envToken = process.env.CURSOR_SESSION_TOKEN || process.env.WORKOS_CURSOR_SESSION_TOKEN;
+  if (envToken?.trim()) return envToken.trim();
   const home = homedir();
-  for (const file of [
-    path.join(home, ".config/cursor/auth.json"),
-    path.join(home, ".cursor/auth.json"),
-    path.join(home, "Library/Application Support/cursor/auth.json"),
-    path.join(home, "AppData/Roaming/cursor/auth.json"),
-  ]) {
-    if (!existsSync(file)) continue;
-    try {
-      const parsed = JSON.parse(readFileSync(file, "utf8")) as { accessToken?: unknown };
-      add(parsed.accessToken);
-    } catch {
-      /* try the next CLI credential file */
-    }
-  }
-  for (const file of [
+  const candidates = [
     path.join(home, ".config/Cursor/User/globalStorage/state.vscdb"),
     path.join(home, "Library/Application Support/Cursor/User/globalStorage/state.vscdb"),
     path.join(home, "AppData/Roaming/Cursor/User/globalStorage/state.vscdb"),
-  ]) {
+  ];
+  for (const file of candidates) {
     if (!existsSync(file)) continue;
     try {
       const db = new DatabaseSync(`file:${file}?mode=ro`, { open: true });
@@ -797,19 +747,19 @@ function readCursorSessionTokens(): string[] {
         | { value?: string }
         | undefined;
       db.close();
-      add(row?.value);
+      if (typeof row?.value === "string" && row.value.trim()) return row.value.trim();
     } catch {
       /* try next path */
     }
   }
-  return tokens;
+  return undefined;
 }
 
 async function cursorFetchJson(url: string, token: string): Promise<unknown> {
   const sub = decodeJwtSub(token);
   const cookie = sub ? `${sub}::${token}` : token;
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 10_000);
+  const timer = setTimeout(() => controller.abort(), 5_000);
   try {
     const res = await fetch(url, {
       headers: {
@@ -841,8 +791,9 @@ async function fetchCursorUsage(ownerId?: string): Promise<UsageProvider> {
       }
     }
   }
-  for (const session of mayUseHostCredentials(ownerId) ? readCursorSessionTokens() : []) {
-    if (!tokens.some((item) => item.token === session)) tokens.push({ token: session });
+  if (!ownerId) {
+    const session = readCursorAppSession();
+    if (session && !tokens.some((item) => item.token === session)) tokens.push({ token: session });
   }
 
   if (!tokens.length) return { ...base, status: "no_auth" };
@@ -852,25 +803,17 @@ async function fetchCursorUsage(ownerId?: string): Promise<UsageProvider> {
     "https://cursor.com/api/usage-summary",
     "https://www.cursor.com/api/usage-summary",
   ];
-  const ordered = [...tokens].sort((a, b) => Number(Boolean(a.apiKeyOnly)) - Number(Boolean(b.apiKeyOnly)));
-  for (const credential of ordered) {
+  for (const credential of tokens) {
     if (credential.apiKeyOnly) continue;
     for (const url of urls) {
       try {
         const body = await cursorFetchJson(url, credential.token);
         const parsed = parseCursorUsageBody(body);
-        if (parsed) {
-          const sessionExpiresAt = jwtExpiryIso(credential.token);
-          return {
-            ...base,
-            ...(credential.connectionId ? { connectionId: credential.connectionId } : {}),
-            ...parsed,
-            extra: {
-              ...parsed.extra,
-              ...(sessionExpiresAt ? { sessionExpiresAt } : {}),
-            },
-          };
-        }
+        if (parsed) return {
+          ...base,
+          ...(credential.connectionId ? { connectionId: credential.connectionId } : {}),
+          ...parsed,
+        };
         lastError = "unsupported usage payload";
       } catch (error) {
         lastError = error instanceof Error ? error.message : "fetch failed";
@@ -885,6 +828,31 @@ async function fetchCursorUsage(ownerId?: string): Promise<UsageProvider> {
 }
 
 /* ---------------- Aggregate + cache ---------------- */
+
+export function preserveUsageOnTransientFailure(
+  previous: UsageProvider | undefined,
+  next: UsageProvider,
+): UsageProvider {
+  if (next.status !== "error" || !previous || !windowsWithUsableQuota(previous.windows)) return next;
+  return {
+    ...previous,
+    status: "stale",
+    error: next.error || "Live quota refresh failed; showing the last known value.",
+  };
+}
+
+function windowsWithUsableQuota(windows: UsageWindow[]) {
+  return windows.some((window) => typeof window.usedPercent === "number" && Number.isFinite(window.usedPercent));
+}
+
+function mergeWithPrevious(previous: UsageSnapshot | undefined, next: UsageSnapshot): UsageSnapshot {
+  if (!previous) return next;
+  const oldByKey = new Map(previous.providers.map((provider) => [provider.key, provider]));
+  return {
+    ...next,
+    providers: next.providers.map((provider) => preserveUsageOnTransientFailure(oldByKey.get(provider.key), provider)),
+  };
+}
 
 async function collect(ownerId?: string): Promise<UsageSnapshot> {
   const sources = [
@@ -914,22 +882,50 @@ async function collect(ownerId?: string): Promise<UsageSnapshot> {
   return { providers, fetchedAt: new Date().toISOString() };
 }
 
-export async function getPlanUsage(force = false, ownerId?: string): Promise<UsageSnapshot> {
-  const key = ownerId || "global";
-  const cached = cache.get(key);
-  if (!force && cached && Date.now() - Date.parse(cached.fetchedAt) < CACHE_TTL_MS) {
-    return cached;
-  }
-  const pending = inflight.get(key);
-  if (pending) return pending;
+function refreshPlanUsage(key: string, ownerId?: string) {
+  const existing = inflight.get(key);
+  if (existing) return existing;
   const request = collect(ownerId)
     .then((snapshot) => {
-      cache.set(key, snapshot);
-      return snapshot;
+      const merged = mergeWithPrevious(cache.get(key), snapshot);
+      cache.set(key, merged);
+      persistUsage(ownerId, merged);
+      return merged;
     })
     .finally(() => {
       inflight.delete(key);
     });
   inflight.set(key, request);
   return request;
+}
+
+export async function getPlanUsage(force = false, ownerId?: string): Promise<UsageSnapshot> {
+  const key = ownerId || "global";
+  let cached = cache.get(key);
+  if (!cached && !force) {
+    cached = loadPersistedUsage(ownerId) || undefined;
+    if (cached) cache.set(key, cached);
+  }
+  const age = cached ? Date.now() - Date.parse(cached.fetchedAt) : Number.POSITIVE_INFINITY;
+
+  if (!force && cached && age < CACHE_TTL_MS) return cached;
+
+  // Any last-known value is renderable immediately, even after a process
+  // restart/deploy. Refresh in the background instead of making the composer
+  // wait on several unrelated provider dashboards. This performs zero model
+  // generations and therefore consumes no LLM tokens.
+  if (!force && cached) {
+    void refreshPlanUsage(key, ownerId);
+    return { ...cached, refreshing: true };
+  }
+
+  // First-ever load has no value to restore. Return a deterministic placeholder
+  // immediately and let the client follow the refreshing flag until the shared
+  // server refresh completes.
+  if (!force) {
+    void refreshPlanUsage(key, ownerId);
+    return { providers: [], fetchedAt: new Date().toISOString(), refreshing: true };
+  }
+
+  return refreshPlanUsage(key, ownerId);
 }

@@ -195,7 +195,7 @@ function SharedMessageView({
                 <span
                   key={`${reference.kind}-${reference.id}-${reference.label}`}
                   title={reference.detail || reference.label}
-                  className="inline-flex max-w-48 items-center gap-1 rounded-full border border-primary/20 bg-primary/[0.06] px-2 py-0.5 text-[11px] text-primary/80"
+                  className="inline-flex max-w-48 items-center gap-1 rounded-md border border-border/60 bg-muted/25 px-2 py-0.5 text-[11px] text-muted-foreground"
                 >
                   <span className="truncate">@{reference.label}</span>
                 </span>
@@ -203,11 +203,11 @@ function SharedMessageView({
             </div>
           ) : null}
           {message.referenceText ? (
-            <div className="flex max-w-[85%] items-start gap-2 rounded-xl border border-primary/20 bg-primary/[0.06] px-3 py-2 text-xs text-muted-foreground">
+            <div className="flex max-w-[85%] items-start gap-2 rounded-lg border border-border/60 bg-muted/25 px-3 py-2 text-xs text-muted-foreground">
               <span className="whitespace-pre-wrap break-words text-left">{message.referenceText}</span>
             </div>
           ) : null}
-          <div className="max-w-[85%] space-y-2 rounded-3xl bg-secondary/80 px-4 py-2.5 text-[15px] leading-relaxed">
+          <div className="max-w-[85%] space-y-2 rounded-xl bg-secondary/70 px-4 py-2.5 text-[15px] leading-relaxed">
             {message.attachments?.length ? (
               <div className="flex max-w-full gap-2 overflow-x-auto pb-1">
                 {message.attachments.map((attachment) => (
@@ -467,25 +467,25 @@ function ShareView() {
           </div>
         ) : null}
         {chat ? (
-          <section className="sticky bottom-0 z-20 -mx-4 mt-10 bg-gradient-to-t from-background via-background/90 to-transparent px-4 pb-4 pt-16 sm:-mx-6 sm:px-6">
+          <section className="sticky bottom-0 z-20 -mx-4 mt-10 border-t border-border/50 bg-background px-4 pb-4 pt-4 sm:-mx-6 sm:px-6">
             {clonedChatId ? (
-              <div className="flex w-full flex-wrap items-center justify-between gap-3 rounded-3xl border border-border/50 bg-card/80 p-2 shadow-[0_8px_40px_-12px_rgba(0,0,0,0.4)] backdrop-blur-xl">
+              <div className="flex w-full flex-wrap items-center justify-between gap-3 rounded-xl border border-border/65 bg-card p-2 shadow-[0_1px_2px_rgba(0,0,0,0.16)]">
                 <div className="min-w-0 px-3 py-1">
                   <p className="text-sm font-medium">Chat cloned</p>
                   <p className="text-xs text-muted-foreground">It is now in your chats and ready to continue.</p>
                 </div>
-                <Button asChild className="rounded-2xl">
+                <Button asChild className="rounded-lg">
                   <a href={`/?c=${encodeURIComponent(clonedChatId)}`}>Open cloned chat</a>
                 </Button>
               </div>
             ) : authenticated ? (
-              <div className="w-full rounded-3xl border border-border/50 bg-card/80 p-2 shadow-[0_8px_40px_-12px_rgba(0,0,0,0.4)] backdrop-blur-xl">
+              <div className="w-full rounded-xl border border-border/65 bg-card p-2 shadow-[0_1px_2px_rgba(0,0,0,0.16)]">
                 <div className="flex flex-wrap items-center justify-between gap-3">
                   <div className="min-w-0 px-3 py-1">
                     <p className="text-sm font-medium">Continue this chat</p>
                     <p className="text-xs text-muted-foreground">Create your own copy and keep chatting.</p>
                   </div>
-                  <Button onClick={() => void cloneChat()} disabled={cloning} className="rounded-2xl">
+                  <Button onClick={() => void cloneChat()} disabled={cloning} className="rounded-lg">
                     {cloning ? "Cloning…" : "Clone this chat"}
                   </Button>
                 </div>
@@ -495,7 +495,7 @@ function ShareView() {
               <button
                 type="button"
                 onClick={() => setLoginOpen(true)}
-                className="flex w-full items-center justify-between gap-4 rounded-3xl border border-dashed border-primary/40 bg-primary/[0.06] px-5 py-4 text-left shadow-[0_8px_40px_-12px_rgba(0,0,0,0.35)] transition-colors hover:border-primary/70 hover:bg-primary/10"
+                className="flex w-full items-center justify-between gap-4 rounded-xl border border-border/70 bg-card px-4 py-3 text-left transition-colors hover:bg-muted/35"
               >
                 <span className="min-w-0">
                   <span className="block text-sm font-medium">Log in to clone this chat</span>
@@ -503,7 +503,7 @@ function ShareView() {
                     Sign in to create your own copy and keep chatting.
                   </span>
                 </span>
-                <LogIn className="size-5 shrink-0 text-primary" />
+                <LogIn className="size-5 shrink-0 text-muted-foreground" />
               </button>
             )}
           </section>

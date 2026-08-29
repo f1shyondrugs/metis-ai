@@ -20,6 +20,7 @@ import type {
   WorkspaceItem,
 } from "@/lib/store";
 import { chatUploadDir, resolveUploadPath } from "@/lib/uploads";
+import { RUNTIME_MODES } from "@/lib/runtime-mode";
 
 const now = () => new Date().toISOString();
 
@@ -177,6 +178,7 @@ export function listChatsForUser(
                 json_extract(data, '$.runUpdatedAt') AS runUpdatedAt,
                 json_extract(data, '$.queueMessage') AS queueMessage,
                 json_extract(data, '$.pendingQuestion') AS pendingQuestion,
+                json_extract(data, '$.pendingApproval') AS pendingApproval,
                 json_extract(data, '$.badge') AS badge,
                 json_extract(data, '$.pinned') AS pinned,
                 json_extract(data, '$.archived') AS archived,
@@ -196,6 +198,7 @@ export function listChatsForUser(
                 json_extract(data, '$.runUpdatedAt') AS runUpdatedAt,
                 json_extract(data, '$.queueMessage') AS queueMessage,
                 json_extract(data, '$.pendingQuestion') AS pendingQuestion,
+                json_extract(data, '$.pendingApproval') AS pendingApproval,
                 json_extract(data, '$.badge') AS badge,
                 json_extract(data, '$.pinned') AS pinned,
                 json_extract(data, '$.archived') AS archived,
@@ -210,6 +213,7 @@ export function listChatsForUser(
       if (item.incognito || item.automationRunId) return [];
       if (!options.includeArchived && archived) return [];
       const pendingQuestion = parseJsonField<PendingChatQuestion>(item.pendingQuestion);
+      const pendingApproval = parseJsonField<ChatIndexEntry["pendingApproval"]>(item.pendingApproval);
       const share = parseJsonField<ChatShare>(item.share);
       const keywords = normalizeChatKeywords(
         parseJsonField<unknown>(item.keywords) ?? item.keywords,
@@ -228,6 +232,7 @@ export function listChatsForUser(
         ...(typeof item.runUpdatedAt === "string" ? { runUpdatedAt: item.runUpdatedAt } : {}),
         ...(typeof item.queueMessage === "string" ? { queueMessage: item.queueMessage } : {}),
         ...(pendingQuestion ? { pendingQuestion } : {}),
+        ...(pendingApproval ? { pendingApproval } : {}),
         ...(typeof item.badge === "string" ? { badge: item.badge as ChatBadge } : {}),
         ...(item.pinned === 1 || item.pinned === true ? { pinned: true } : {}),
         ...(archived ? { archived: true } : {}),
@@ -530,6 +535,9 @@ export function updateChat(
     runUpdatedAt?: string | null;
     queueMessage?: string | null;
     pendingQuestion?: PendingChatQuestion | null;
+    runtimeMode?: string | null;
+    pendingApproval?: Chat["pendingApproval"] | null;
+    approvedPatterns?: string[] | null;
     badge?: ChatBadge | null;
     touchUpdatedAt?: boolean;
     projectId?: string | null;
@@ -554,6 +562,11 @@ export function updateChat(
     else if (patch.agentId !== undefined) next.agentId = patch.agentId.trim() || undefined;
     if (patch.modelId === null) delete next.modelId;
     else if (patch.modelId !== undefined) next.modelId = patch.modelId.trim() || undefined;
+    if (patch.runtimeMode === null) delete next.runtimeMode;
+    else if (patch.runtimeMode !== undefined) {
+      const requested = patch.runtimeMode.trim();
+      if ((RUNTIME_MODES as readonly string[]).includes(requested)) next.runtimeMode = requested;
+    }
     if (patch.modelParams === null) delete next.modelParams;
     else if (patch.modelParams) next.modelParams = patch.modelParams;
     if (patch.queuedMessages === null) delete next.queuedMessages;
@@ -682,6 +695,36 @@ export function updateChat(
     else if (patch.queueMessage !== undefined) next.queueMessage = patch.queueMessage.trim().slice(0, 200) || undefined;
     if (patch.pendingQuestion === null) delete next.pendingQuestion;
     else if (patch.pendingQuestion) next.pendingQuestion = patch.pendingQuestion;
+    if (patch.pendingApproval === null) delete next.pendingApproval;
+    else if (patch.pendingApproval) {
+      next.pendingApproval = {
+        id: String(patch.pendingApproval.id || "").slice(0, 200),
+        title: String(patch.pendingApproval.title || "").slice(0, 500),
+        ...(typeof patch.pendingApproval.command === "string" && patch.pendingApproval.command.trim()
+          ? { command: patch.pendingApproval.command.slice(0, 20_000) }
+          : {}),
+        ...(Array.isArray(patch.pendingApproval.files)
+          ? {
+              files: patch.pendingApproval.files
+                .map((file) => ({
+                  path: String(file?.path || "").slice(0, 2_000),
+                  status: String(file?.status || "").slice(0, 100),
+                }))
+                .filter((file) => file.path)
+                .slice(0, 100),
+            }
+          : {}),
+        createdAt: String(patch.pendingApproval.createdAt || now()),
+      };
+    }
+    if (patch.approvedPatterns === null) delete next.approvedPatterns;
+    else if (patch.approvedPatterns !== undefined) {
+      const approvedPatterns = [...new Set(
+        patch.approvedPatterns.map((pattern) => String(pattern || "").trim()).filter(Boolean),
+      )].slice(0, 100);
+      if (approvedPatterns.length) next.approvedPatterns = approvedPatterns;
+      else delete next.approvedPatterns;
+    }
     if (patch.badge === null) delete next.badge;
     else if (patch.badge) next.badge = patch.badge;
     return saveChatInternal(next, { touchUpdatedAt: patch.touchUpdatedAt !== false });
@@ -803,6 +846,8 @@ export function cloneChatByShareId(shareId: string, password: string | undefined
     delete cloned.agentId;
     delete cloned.runUpdatedAt;
     delete cloned.pendingQuestion;
+    delete cloned.pendingApproval;
+    delete cloned.approvedPatterns;
 
     const attachments = cloned.messages.flatMap((message) => message.attachments || []);
     if (attachments.length) {

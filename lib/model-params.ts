@@ -25,6 +25,7 @@ export type ModelParamSelection = {
 export type ModelParameterModel = {
   id?: string;
   displayName?: string;
+  providerId?: string;
   contextWindow?: number;
   capabilities?: Record<string, boolean>;
   parameters?: ModelParameter[];
@@ -41,8 +42,64 @@ export const FAST_PARAMETER: ModelParameter = {
   ],
 };
 
+const COMPATIBLE_REASONING_PARAMETER: ModelParameter = {
+  id: "effort",
+  displayName: "Reasoning",
+  values: [
+    { value: "none", displayName: "Provider default" },
+    { value: "low", displayName: "Low" },
+    { value: "medium", displayName: "Medium" },
+    { value: "high", displayName: "High" },
+  ],
+};
+
+const COMPATIBLE_OPENAI_REASONING_PARAMETER: ModelParameter = {
+  id: "effort",
+  displayName: "Reasoning",
+  values: [
+    { value: "none", displayName: "Provider default" },
+    { value: "minimal", displayName: "Minimal" },
+    { value: "low", displayName: "Low" },
+    { value: "medium", displayName: "Medium" },
+    { value: "high", displayName: "High" },
+    { value: "xhigh", displayName: "Extra high" },
+  ],
+};
+
+const GLM_53_REASONING_PARAMETER: ModelParameter = {
+  id: "effort",
+  displayName: "Reasoning",
+  values: [
+    { value: "low", displayName: "Low" },
+    { value: "high", displayName: "High" },
+    { value: "max", displayName: "Max" },
+  ],
+};
+
+function isGlm53Model(id = "") {
+  return /(?:^|[\/:_-])glm[-_.]?5(?:[.-]?3|p3)(?:$|[\/:_-])/i.test(id.trim());
+}
+
+function inferredCompatibleReasoningParameter(model: ModelParameterModel): ModelParameter | null {
+  if (model.providerId !== "compatible") return null;
+  if (model.parameters?.some((parameter) => REASONING_IDS.has(parameter.id))) return null;
+  const id = model.id || "";
+  if (isGlm53Model(id)) return GLM_53_REASONING_PARAMETER;
+  if (/(?:^|[\/:_-])(?:gpt[-_.]?5|o[134](?:[-_.]|$)|codex)(?:$|[\/:_-])/i.test(id)) {
+    return COMPATIBLE_OPENAI_REASONING_PARAMETER;
+  }
+  return COMPATIBLE_REASONING_PARAMETER;
+}
+
 const REASONING_IDS = new Set(["effort", "reasoning"]);
+const CONTEXT_IDS = new Set(["context", "contextWindow", "context_window"]);
 const REMOVED_PARAM_IDS = new Set(["uncensored"]);
+
+function canonicalParamId(id: string): string {
+  if (CONTEXT_IDS.has(id)) return "context";
+  if (id === "reasoning") return "effort";
+  return id;
+}
 
 function parameterRank(id: string): number {
   if (id === "context") return 0;
@@ -90,17 +147,19 @@ export function contextParameterForModel(
   concreteValues?: ReadonlyArray<ModelParamValue>,
 ): ModelParameter | null {
   const max = finiteContextWindow(contextWindow);
-  const maxValue: ModelParamValue | null = max
-    ? { value: "max", displayName: contextLabel(max) }
-    : null;
   const normalizedConcrete = (concreteValues || [])
     .map((entry) => {
       const value = typeof entry?.value === "string" ? entry.value.trim() : "";
       if (!value) return null;
-      if (value.toLowerCase() === "max" || value.toLowerCase() === "unlimited") {
-        return maxValue || {
-          value: value.toLowerCase() === "unlimited" ? "unlimited" : "max",
-          ...(entry.displayName ? { displayName: entry.displayName } : {}),
+      const normalized = value.toLowerCase();
+      if (normalized === "max" || normalized === "unlimited") {
+        return {
+          value: normalized,
+          ...(entry.displayName
+            ? { displayName: entry.displayName }
+            : max
+              ? { displayName: contextLabel(max) }
+              : {}),
         };
       }
       const tokens = contextValueTokens(value);
@@ -108,36 +167,18 @@ export function contextParameterForModel(
     })
     .filter((entry): entry is ModelParamValue => Boolean(entry))
     .filter((entry, index, all) => all.findIndex((candidate) => candidate.value === entry.value) === index);
-  if (normalizedConcrete.length) {
-    const values = normalizedConcrete.filter((entry) => entry.value !== "max" && entry.value !== "unlimited");
-    if (max && max > 272_000 && !values.some((entry) => entry.value === "272k")) {
-      values.push({ value: "272k", displayName: "272K" });
-    }
-    if (maxValue) values.push(maxValue);
-    else {
-      values.push(...normalizedConcrete.filter((entry) => entry.value === "max" || entry.value === "unlimited"));
-    }
-    if (!values.length) return null;
-    return { id: "context", displayName: "Context", values };
-  }
-  if (!maxValue || !max) return null;
-  if (max <= 272_000) {
-    return { id: "context", displayName: "Context", values: [maxValue] };
-  }
-  return {
-    id: "context",
-    displayName: "Context",
-    values: [
-      { value: "272k", displayName: "272K" },
-      maxValue,
-    ],
-  };
+
+  // T3-style behavior: a known context limit is metadata for the meter and
+  // compaction, not permission to fabricate a context selector. Only expose
+  // choices that the provider/CLI actually advertised.
+  if (!normalizedConcrete.length) return null;
+  return { id: "context", displayName: "Context", values: normalizedConcrete };
 }
 
 function cloneParameter(parameter: ModelParameter): ModelParameter {
   return {
-    id: parameter.id === "reasoning" ? "effort" : parameter.id,
-    displayName: REASONING_IDS.has(parameter.id) ? "Reasoning" : parameter.displayName,
+    id: canonicalParamId(parameter.id),
+    displayName: REASONING_IDS.has(parameter.id) ? "Reasoning" : CONTEXT_IDS.has(parameter.id) ? "Context" : parameter.displayName,
     values: parameter.values.map((value) => ({ ...value })),
   };
 }
@@ -147,10 +188,10 @@ export function modelParametersForModel(model: ModelParameterModel): ModelParame
   const seen = new Set<string>();
 
   // Context is ordered at the very top, before thinking effort and other parameters.
-  const contextDefinition = model.parameters?.find((parameter) => parameter.id === "context");
+  const contextDefinition = model.parameters?.find((parameter) => CONTEXT_IDS.has(parameter.id));
   const variantContextValues = (model.variants || [])
     .flatMap((variant) => variant)
-    .filter((parameter) => parameter.id === "context")
+    .filter((parameter) => CONTEXT_IDS.has(parameter.id))
     .map((parameter) => ({ value: parameter.value }));
   const inferredWindow = finiteContextWindow(model.contextWindow) ?? contextWindowForModel({
     id: model.id,
@@ -167,11 +208,20 @@ export function modelParametersForModel(model: ModelParameterModel): ModelParame
   }
 
   for (const raw of model.parameters || []) {
-    if (raw.id === "context" || REMOVED_PARAM_IDS.has(raw.id)) continue;
+    if (CONTEXT_IDS.has(raw.id) || REMOVED_PARAM_IDS.has(raw.id)) continue;
     const parameter = cloneParameter(raw);
     if (seen.has(parameter.id) || REMOVED_PARAM_IDS.has(parameter.id)) continue;
     seen.add(parameter.id);
     parameters.push(parameter);
+  }
+
+  // OpenAI-compatible /models endpoints usually expose model IDs only. The
+  // compatible transport itself supports reasoning_effort, so offer a safe
+  // provider-default selector even when the endpoint does not advertise one.
+  const compatibleReasoning = inferredCompatibleReasoningParameter(model);
+  if (compatibleReasoning && !seen.has("effort")) {
+    parameters.push(cloneParameter(compatibleReasoning));
+    seen.add("effort");
   }
 
   // Fast is only offered when the provider/model explicitly exposes it.
@@ -190,16 +240,19 @@ export function defaultParamsForModel(model: ModelParameterModel): ModelParamSel
   const parameters = modelParametersForModel(model);
   const allowed = new Map(parameters.map((parameter) => [parameter.id, parameter]));
   const result: ModelParamSelection[] = [];
-  const context = parameters.find((parameter) => parameter.id === "context");
-  if (context) {
-    result.push({ id: "context", value: "max" });
-  }
   for (const param of model.defaultParams || []) {
-    const id = param.id === "reasoning" ? "effort" : param.id;
-    if (id === "context" || REMOVED_PARAM_IDS.has(id)) continue;
+    const id = canonicalParamId(param.id);
+    if (REMOVED_PARAM_IDS.has(id)) continue;
     const definition = allowed.get(id);
     if (!definition || !definition.values.some((value) => value.value === param.value)) continue;
     result.push({ id, value: param.value });
+  }
+  if (!result.some((param) => param.id === "effort") && model.providerId === "compatible") {
+    const effort = allowed.get("effort");
+    const fallback = isGlm53Model(model.id) ? "max" : "none";
+    if (effort?.values.some((value) => value.value === fallback)) {
+      result.push({ id: "effort", value: fallback });
+    }
   }
   if (parameters.some((parameter) => parameter.id === "fast") && !result.some((param) => param.id === "fast")) {
     result.push({ id: "fast", value: "false" });
@@ -215,7 +268,7 @@ export function sanitizeModelParams(
   const result: ModelParamSelection[] = [];
   for (const raw of params || []) {
     if (!raw || typeof raw.id !== "string" || typeof raw.value !== "string") continue;
-    const id = raw.id === "reasoning" ? "effort" : raw.id;
+    const id = canonicalParamId(raw.id);
     if (REMOVED_PARAM_IDS.has(id)) continue;
     const definition = allowed.get(id);
     if (!definition || !definition.values.some((value) => value.value === raw.value)) continue;
@@ -226,21 +279,29 @@ export function sanitizeModelParams(
 
 export function providerNativeParams(
   params?: ReadonlyArray<ModelParamSelection> | null,
+  options?: { includeContext?: boolean },
 ): ModelParamSelection[];
 export function providerNativeParams(
   model: ModelParameterModel,
   params?: ReadonlyArray<ModelParamSelection> | null,
+  options?: { includeContext?: boolean },
 ): ModelParamSelection[];
 export function providerNativeParams(
   modelOrParams?: ModelParameterModel | ReadonlyArray<ModelParamSelection> | null,
-  params?: ReadonlyArray<ModelParamSelection> | null,
+  paramsOrOptions?: ReadonlyArray<ModelParamSelection> | { includeContext?: boolean } | null,
+  maybeOptions?: { includeContext?: boolean },
 ): ModelParamSelection[] {
-  const isSelectionArray = (value: unknown): value is ReadonlyArray<ModelParamSelection> =>
-    Array.isArray(value);
-  const selections = isSelectionArray(modelOrParams)
+  const isSelectionArray = (value: unknown): value is ReadonlyArray<ModelParamSelection> => Array.isArray(value);
+  const directSelections = isSelectionArray(modelOrParams);
+  const selections = directSelections
     ? modelOrParams
     : modelOrParams
-    ? sanitizeModelParams(modelOrParams, params)
-    : [];
-  return selections.filter((param) => param.id !== "context" && !REMOVED_PARAM_IDS.has(param.id));
+      ? sanitizeModelParams(modelOrParams, isSelectionArray(paramsOrOptions) ? paramsOrOptions : undefined)
+      : [];
+  const options = directSelections
+    ? (paramsOrOptions && !isSelectionArray(paramsOrOptions) ? paramsOrOptions : maybeOptions)
+    : maybeOptions;
+  return selections
+    .map((param) => ({ ...param, id: canonicalParamId(param.id) }))
+    .filter((param) => (options?.includeContext || param.id !== "context") && !REMOVED_PARAM_IDS.has(param.id));
 }

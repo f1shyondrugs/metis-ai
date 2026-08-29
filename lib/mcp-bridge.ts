@@ -16,6 +16,54 @@ import { sanitizeJsonSchema } from "@/lib/providers/tool-schema";
 
 export type McpBridgeTool = { name: string; description?: string; inputSchema?: Record<string, unknown> };
 
+
+function schemaTypeMatches(value: unknown, type: string) {
+  if (type === "string") return typeof value === "string";
+  if (type === "number") return typeof value === "number" && Number.isFinite(value);
+  if (type === "integer") return typeof value === "number" && Number.isInteger(value);
+  if (type === "boolean") return typeof value === "boolean";
+  if (type === "array") return Array.isArray(value);
+  if (type === "object") return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+  return true;
+}
+
+/**
+ * Embedded/textual tool fallbacks call Tool.execute directly and therefore do
+ * not pass through AI SDK argument validation. Validate the sanitized MCP
+ * schema again at the bridge boundary so malformed calls never reach shell,
+ * filesystem, browser, or other tools as `{}` / `undefined` arguments.
+ */
+export function assertBridgeToolInput(
+  toolName: string,
+  input: unknown,
+  schema: Record<string, unknown>,
+) {
+  const args = input && typeof input === "object" && !Array.isArray(input)
+    ? input as Record<string, unknown>
+    : {};
+  const required = Array.isArray(schema.required)
+    ? schema.required.filter((item): item is string => typeof item === "string")
+    : [];
+  const missing = required.filter((key) => !(key in args) || args[key] === undefined || args[key] === null || args[key] === "");
+  if (missing.length) {
+    throw new Error(`Tool ${toolName} is missing required argument${missing.length === 1 ? "" : "s"}: ${missing.join(", ")}.`);
+  }
+  const properties = schema.properties && typeof schema.properties === "object" && !Array.isArray(schema.properties)
+    ? schema.properties as Record<string, unknown>
+    : {};
+  for (const [key, value] of Object.entries(args)) {
+    const rule = properties[key];
+    if (!rule || typeof rule !== "object" || Array.isArray(rule)) continue;
+    const type = typeof (rule as Record<string, unknown>).type === "string"
+      ? String((rule as Record<string, unknown>).type)
+      : undefined;
+    if (type && !schemaTypeMatches(value, type)) {
+      throw new Error(`Tool ${toolName} argument ${key} must be ${type}.`);
+    }
+  }
+  return args;
+}
+
 type GatewayProcess = {
   proc: ReturnType<typeof spawn>;
   requestId: number;
@@ -214,9 +262,11 @@ export async function mcpBridgeTools(
   const tools: ToolSet = {};
   for (const definition of definitions) {
     if (!allowed.has(definition.name)) continue;
+    const schema = sanitizeJsonSchema(definition.inputSchema || { type: "object", properties: {} });
     const bridgedExecute = async (args: Record<string, unknown>) => {
+      const validatedArgs = assertBridgeToolInput(definition.name, args, schema);
       const result = await withFreshGateway(env, async (gateway) => {
-        return callGateway(gateway, "tools/call", { name: definition.name, arguments: args || {} }, 300_000);
+        return callGateway(gateway, "tools/call", { name: definition.name, arguments: validatedArgs }, 300_000);
       });
       const record = result as { content?: Array<{ type?: string; text?: string }> };
       const text = (record?.content || [])
@@ -227,7 +277,6 @@ export async function mcpBridgeTools(
       if (recordWithError?.isError) throw new Error(text || `Tool ${definition.name} failed`);
       return text || result || "";
     };
-    const schema = sanitizeJsonSchema(definition.inputSchema || { type: "object", properties: {} });
     tools[definition.name] = tool({
       description: (definition.description || definition.name).slice(0, 500),
       inputSchema: jsonSchema(schema as Parameters<typeof jsonSchema>[0]),

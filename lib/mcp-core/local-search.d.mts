@@ -6,7 +6,7 @@ export type LocalSearchResult = {
 };
 
 export type LocalWebSearchResponse = {
-  source: "local-searxng";
+  source: "local-searxng" | "local-scrapling-bing";
   query: string;
   results: LocalSearchResult[];
 };
@@ -15,6 +15,7 @@ export function localWebSearch(options?: {
   query?: string;
   numResults?: number;
   endpoint?: string;
+  scraperEndpoint?: string;
   fetchImpl?: typeof fetch;
   timeoutMs?: number;
 }): Promise<LocalWebSearchResponse>;
@@ -35,6 +36,7 @@ export type LocalSearchOptions = {
   query: string;
   numResults?: number;
   endpoint?: string;
+  scraperEndpoint?: string;
   fetchImpl?: typeof fetch;
   timeoutMs?: number;
 };

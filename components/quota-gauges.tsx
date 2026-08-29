@@ -2,12 +2,10 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { RefreshCw } from "lucide-react";
-import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import {
   formatResetAt,
-  lowQuotaAlerts,
   matchUsageProvider,
   percentLeft,
   selectPrimaryUsageWindow,
@@ -73,14 +71,13 @@ function contextStateLabel(state: ContextBudgetState) {
 
 function thresholdColor(percentLeftValue: number) {
   if (percentLeftValue <= 10) return "text-red-400";
-  if (percentLeftValue <= 25) return "text-amber-400";
-  return "text-emerald-400";
+  return "text-foreground/80";
 }
 
 function usedBarColor(usedPercent: number) {
   if (usedPercent >= CONTEXT_CRITICAL_RATIO * 100) return "bg-red-400";
   if (usedPercent >= CONTEXT_COMPACT_RATIO * 100) return "bg-amber-400";
-  return "bg-emerald-400";
+  return "bg-foreground/55";
 }
 
 export function ContextUsageText({
@@ -118,11 +115,11 @@ export function ContextUsageText({
     <TooltipProvider>
       <Tooltip open={tooltipOpen} onOpenChange={setTooltipOpen}>
         <TooltipTrigger asChild>
-          <button type="button" className={cn("inline-flex h-7 shrink-0 items-center rounded-md px-1 text-[11px] font-medium tabular-nums tracking-tight outline-none transition-colors focus-visible:ring-2 focus-visible:ring-ring", pressure.critical ? "text-red-400" : `${stateClass} hover:text-muted-foreground`, className)} onClick={() => setTooltipOpen((open) => !open)} aria-label={pressure.known ? `Context: ${formatTokenCount(used)} of ${formatTokenCount(total)} effective input tokens used` : `Context: ${formatTokenCount(used)} tokens used; effective input budget unknown`}>
+          <button type="button" className={cn("inline-flex h-7 shrink-0 items-center rounded-md px-1 text-[11px] font-normal tabular-nums tracking-[-0.01em] outline-none transition-colors focus-visible:ring-2 focus-visible:ring-ring", pressure.critical ? "text-red-400" : `${stateClass} hover:text-muted-foreground`, className)} onClick={() => setTooltipOpen((open) => !open)} aria-label={pressure.known ? `Context: ${formatTokenCount(used)} of ${formatTokenCount(total)} effective input tokens used` : `Context: ${formatTokenCount(used)} tokens used; effective input budget unknown`}>
             {label}
           </button>
         </TooltipTrigger>
-        <TooltipContent side="bottom" align="end" sideOffset={8} arrowClassName="!bg-popover !fill-popover" className="w-64 rounded-xl border border-border/60 bg-popover p-3 text-popover-foreground shadow-xl">
+        <TooltipContent side="bottom" align="end" sideOffset={8} collisionPadding={8} arrowClassName="!bg-popover !fill-popover" className="w-64 max-w-[calc(100vw-1rem)] rounded-xl border border-border/60 bg-popover p-3 text-popover-foreground shadow-xl">
           <div className="space-y-2">
             <div className="flex items-center justify-between gap-3"><span className="font-medium">Context budget</span><span className={cn("font-medium", stateClass)}>{contextStateLabel(state)}</span></div>
             {pressure.known ? <>
@@ -139,17 +136,22 @@ export function ContextUsageText({
   );
 }
 
-function SemicircleGauge({ percentLeftValue, className }: { percentLeftValue: number | null; className?: string }) {
-  const known = typeof percentLeftValue === "number" && Number.isFinite(percentLeftValue);
-  const clamped = known ? Math.min(100, Math.max(0, percentLeftValue)) : 0;
-  const radius = 10;
-  const length = Math.PI * radius;
-  return (
-    <svg viewBox="0 0 24 14" className={cn("h-3.5 w-6", className)} aria-hidden="true">
-      <path d="M 2 12 A 10 10 0 0 1 22 12" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" className="text-muted-foreground/35" />
-      {known ? <path d="M 2 12 A 10 10 0 0 1 22 12" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeDasharray={length} strokeDashoffset={length * (1 - clamped / 100)} className={cn("transition-[stroke-dashoffset,color] duration-500", thresholdColor(clamped))} /> : null}
-    </svg>
-  );
+function quotaBarColor(percentLeftValue: number) {
+  if (percentLeftValue <= 10) return "bg-red-400";
+  return "bg-foreground/55";
+}
+
+function displayUsageExtra(provider: UsageProvider) {
+  const labels: Record<string, string> = {
+    planUsed: "Plan used",
+    planLimit: "Plan limit",
+    onDemandUsed: "Credits used",
+    onDemandLimit: "Credit limit",
+    credits: "Credits",
+  };
+  return Object.entries(provider.extra || {})
+    .filter(([key, value]) => labels[key] && value !== null && value !== undefined)
+    .map(([key, value]) => ({ key, label: labels[key], value }));
 }
 
 function UsageDetails({ provider }: { provider: UsageProvider }) {
@@ -177,12 +179,12 @@ function UsageDetails({ provider }: { provider: UsageProvider }) {
         const reset = formatResetAt(window.resetsAt);
         return <div key={`${provider.key}:${window.label}`} className="space-y-1">
           <div className="flex items-center justify-between text-[11px] text-muted-foreground"><span className="capitalize">{window.label}</span><span className="tabular-nums text-foreground">{remaining.toFixed(0)}% left</span></div>
-          <div className="h-1.5 overflow-hidden rounded-full bg-white/15"><div className={cn("h-full rounded-full transition-[width,background-color] duration-500", usedBarColor(window.usedPercent))} style={{ width: `${Math.min(100, window.usedPercent)}%` }} /></div>
+          <div className="h-1 overflow-hidden rounded-full bg-foreground/10"><div className={cn("h-full rounded-full transition-[width,background-color] duration-500", quotaBarColor(remaining))} style={{ width: `${remaining}%` }} /></div>
           {reset ? <p className="text-[10px] text-muted-foreground">Resets in {reset}</p> : null}
         </div>;
       })}
       {!usable.length ? <p className="text-[10px] leading-snug text-muted-foreground">{status === "no_auth" ? "No authenticated quota source is connected." : status === "unsupported" ? "This connection does not expose a quota window." : provider.error ? `Live quota could not be loaded: ${provider.error}` : "No percentage quota is available. Metis will not invent one."}</p> : null}
-      {provider.extra ? <div className="flex flex-wrap gap-x-3 gap-y-1 text-[10px] text-muted-foreground">{Object.entries(provider.extra).map(([key, value]) => value === null || value === undefined ? null : <span key={key}>{key === "planUsed" ? "Plan used" : key === "planLimit" ? "Plan limit" : key === "onDemandUsed" ? "Credits used" : key}: <span className="tabular-nums text-foreground">{typeof value === "number" ? value.toLocaleString() : value}</span></span>)}</div> : null}
+      {displayUsageExtra(provider).length ? <div className="flex flex-wrap gap-x-3 gap-y-1 text-[10px] text-muted-foreground">{displayUsageExtra(provider).map(({ key, label, value }) => <span key={key}>{label}: <span className="tabular-nums text-foreground">{typeof value === "number" ? value.toLocaleString() : value}</span></span>)}</div> : null}
     </div>
   );
 }
@@ -192,16 +194,31 @@ export function PlanUsageGauge({ provider, providerName, className }: { provider
   const primary = provider ? selectPrimaryUsageWindow(provider.windows) : null;
   const left = primary ? percentLeft(primary.usedPercent) : null;
   const displayName = provider?.name || providerName || "Selected provider";
+  const stale = provider?.status === "stale";
   return (
     <TooltipProvider>
       <Tooltip open={tooltipOpen} onOpenChange={setTooltipOpen}>
         <TooltipTrigger asChild>
-          <button type="button" className={cn("relative inline-flex h-7 w-7 shrink-0 items-end justify-center rounded-full pb-0.5 outline-none focus-visible:ring-2 focus-visible:ring-ring", className)} aria-label={left !== null ? `${displayName} usage: ${left.toFixed(0)}% left` : `${displayName} usage unavailable`} onClick={() => setTooltipOpen((open) => !open)}>
-            <SemicircleGauge percentLeftValue={left} />
+          <button
+            type="button"
+            className={cn(
+              "inline-flex h-7 shrink-0 items-center justify-center rounded-md px-1 text-[10px] font-normal tabular-nums tracking-[-0.015em] outline-none transition-[color,opacity] hover:text-foreground focus-visible:ring-1 focus-visible:ring-ring/70",
+              left === null
+                ? "text-muted-foreground/35"
+                : left <= 10
+                  ? "text-red-400"
+                  : "text-muted-foreground/60",
+              stale && "opacity-60",
+              className,
+            )}
+            aria-label={left !== null ? `${displayName} usage: ${left.toFixed(0)}% left${stale ? ", stale" : ""}` : `${displayName} usage unavailable`}
+            onClick={() => setTooltipOpen((open) => !open)}
+          >
+            {left !== null ? `${left.toFixed(0)}%` : "—"}
           </button>
         </TooltipTrigger>
-        <TooltipContent side="bottom" align="end" sideOffset={8} arrowClassName="!bg-popover !fill-popover" className="w-64 rounded-xl border border-border/60 bg-popover p-3 text-popover-foreground shadow-xl">
-          {provider ? <UsageDetails provider={provider} /> : <div className="space-y-1.5"><p className="font-medium">{displayName}</p><p className="text-[10px] leading-snug text-muted-foreground">No live percentage quota is available for this connection. Metis will not invent a usage value.</p></div>}
+        <TooltipContent side="bottom" align="end" sideOffset={8} collisionPadding={8} arrowClassName="!bg-popover !fill-popover" className="w-64 max-w-[calc(100vw-1rem)] rounded-xl border border-border/60 bg-popover p-3 text-popover-foreground shadow-xl">
+          {provider ? <UsageDetails provider={provider} /> : <div className="space-y-1.5"><p className="font-medium">{displayName}</p><p className="text-[10px] leading-snug text-muted-foreground">Quota unavailable for this connection.</p></div>}
         </TooltipContent>
       </Tooltip>
     </TooltipProvider>
@@ -213,11 +230,13 @@ export function PlanUsageCardGauge({ provider }: { provider: UsageProvider }) {
   if (!primary) return null;
   const left = percentLeft(primary.usedPercent);
   return (
-    <div className="flex items-center gap-3">
-      <SemicircleGauge percentLeftValue={left} className="h-5 w-9" />
-      <div className="min-w-0 flex-1">
+    <div className="min-w-0 space-y-1.5">
+      <div className="flex items-baseline justify-between gap-3">
         <p className={cn("text-sm font-medium tabular-nums", thresholdColor(left))}>{left.toFixed(0)}% left</p>
-        <p className="text-[11px] capitalize text-muted-foreground">{primary.label}</p>
+        <p className="text-[10px] capitalize text-muted-foreground">{primary.label}</p>
+      </div>
+      <div className="h-1 overflow-hidden rounded-full bg-foreground/10">
+        <div className={cn("h-full rounded-full", quotaBarColor(left))} style={{ width: `${left}%` }} />
       </div>
     </div>
   );
@@ -240,77 +259,111 @@ export function PlanUsagePanel({
       setRefreshing(false);
     }
   };
+  const quotaProviders = snapshot?.providers.filter((provider) =>
+    provider.key === "cursor" || provider.key === "codex" || provider.key === "zai" || provider.key === "antigravity",
+  ) || [];
   return (
-    <section className="flex min-w-0 flex-col gap-4">
-      <div className="flex min-w-0 items-start justify-between gap-3">
+    <section className="flex min-w-0 flex-col gap-3">
+      <div className="flex min-w-0 items-center justify-between gap-3">
         <div className="min-w-0">
           <h3 className="text-sm font-medium">Provider usage</h3>
-          <p className="mt-1 text-xs text-muted-foreground">
-            Only provider-reported quota windows are shown. Missing data stays neutral.
+          <p className="mt-0.5 text-[11px] text-muted-foreground">
+            {snapshot?.refreshing ? "Refreshing live limits…" : snapshot ? `Updated ${formatAge(snapshot.fetchedAt) || "just now"}` : "Live limits from connected providers"}
           </p>
         </div>
         <button
           type="button"
-          className="inline-flex h-8 shrink-0 items-center gap-1.5 rounded-md border border-border/60 px-2 text-xs text-muted-foreground transition-colors hover:text-foreground disabled:opacity-50"
+          className="inline-flex size-7 shrink-0 items-center justify-center rounded-md text-muted-foreground/70 transition-colors hover:bg-muted/30 hover:text-foreground disabled:opacity-40"
           onClick={() => void refresh()}
           disabled={!onRefresh || refreshing}
+          aria-label="Refresh provider usage"
+          title="Refresh provider usage"
         >
           <RefreshCw className={cn("size-3.5", refreshing && "animate-spin")} />
-          Refresh
         </button>
       </div>
-      {lowQuotaAlerts(snapshot).length ? (
-        <div className="rounded-lg border border-amber-400/40 bg-amber-400/10 p-3 text-xs text-amber-200">
-          {lowQuotaAlerts(snapshot).map((alert) => (
-            <p key={`${alert.providerKey}:${alert.windowLabel}`}>
-              {alert.providerName}: {alert.remainingPct.toFixed(0)}% left on {alert.windowLabel}
-              {alert.resetsAt ? ` · resets in ${formatResetAt(alert.resetsAt) || "pending"}` : ""}.
-            </p>
-          ))}
-        </div>
-      ) : null}
-      {!snapshot ? (
-        <div className="rounded-lg border border-border/60 p-4 text-xs text-muted-foreground">
-          Usage has not been loaded yet.
-        </div>
+      {!snapshot || (snapshot.refreshing && quotaProviders.length === 0) ? (
+        <div className="py-2 text-xs text-muted-foreground">Loading provider limits…</div>
       ) : (
-        <div className="grid min-w-0 grid-cols-1 gap-3">
-          {snapshot.providers
-              .filter((provider) => provider.source === "dashboard" || ["cursor", "codex", "zai", "antigravity"].includes(provider.key))
-              .map((provider) => (
-            <div key={provider.key} className="min-w-0 overflow-hidden rounded-lg border border-border/60 p-4">
+        <div className="min-w-0 divide-y divide-border/45 border-y border-border/45">
+          {quotaProviders.map((provider) => (
+            <div key={provider.key} className="min-w-0 py-3 first:pt-3 last:pb-3">
               <UsageDetails provider={provider} />
             </div>
           ))}
         </div>
       )}
-      {snapshot ? <p className="text-[10px] text-muted-foreground">Fetched {formatAge(snapshot.fetchedAt) || "recently"}.</p> : null}
     </section>
   );
 }
 
+const USAGE_STORAGE_KEY = "metis:plan-usage:v1";
+const USAGE_POLL_MS = 120_000;
 let sharedSnapshot: UsageSnapshot | null = null;
 const sharedListeners = new Set<(snapshot: UsageSnapshot | null) => void>();
 let sharedTimer: ReturnType<typeof setInterval> | null = null;
-let sharedInflight = 0;
-let sharedLoadVersion = 0;
+let sharedInflight: Promise<void> | null = null;
+
+function validUsageSnapshot(value: unknown): value is UsageSnapshot {
+  if (!value || typeof value !== "object") return false;
+  const snapshot = value as Partial<UsageSnapshot>;
+  return Array.isArray(snapshot.providers) && typeof snapshot.fetchedAt === "string";
+}
+
+function publishUsageSnapshot(snapshot: UsageSnapshot) {
+  sharedSnapshot = snapshot;
+  if (typeof window !== "undefined") {
+    try { window.localStorage.setItem(USAGE_STORAGE_KEY, JSON.stringify(snapshot)); } catch { /* storage can be disabled */ }
+  }
+  for (const listener of sharedListeners) listener(snapshot);
+}
+
+function restoreStoredUsageSnapshot() {
+  if (sharedSnapshot || typeof window === "undefined") return sharedSnapshot;
+  try {
+    const raw = window.localStorage.getItem(USAGE_STORAGE_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as unknown;
+    if (!validUsageSnapshot(parsed)) return null;
+    sharedSnapshot = parsed;
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+
+async function performSharedPlanUsageLoad(force: boolean) {
+  const controller = new AbortController();
+  const timer = window.setTimeout(() => controller.abort(), force ? 10_000 : 9_000);
+  try {
+    const res = await fetch(force ? "/api/plan-usage?refresh=1" : "/api/plan-usage", {
+      cache: "no-store",
+      signal: controller.signal,
+    });
+    if (!res.ok) return;
+    const nextSnapshot = (await res.json()) as unknown;
+    if (!validUsageSnapshot(nextSnapshot)) return;
+    publishUsageSnapshot(nextSnapshot);
+    if (nextSnapshot.refreshing) {
+      window.setTimeout(() => void loadSharedPlanUsage(false), 1_500);
+    }
+  } catch {
+    // A transient quota endpoint failure must never blank a previously valid UI.
+  } finally {
+    window.clearTimeout(timer);
+  }
+}
 
 async function loadSharedPlanUsage(force = false) {
-  if (sharedInflight > 0 && !force) return;
-  const version = ++sharedLoadVersion;
-  sharedInflight += 1;
-  try {
-    const res = await fetch(force ? "/api/plan-usage?refresh=1" : "/api/plan-usage", { cache: "no-store" });
-    if (!res.ok) return;
-    const nextSnapshot = (await res.json()) as UsageSnapshot;
-    if (version !== sharedLoadVersion) return;
-    sharedSnapshot = nextSnapshot;
-    for (const listener of sharedListeners) listener(sharedSnapshot);
-  } catch {
-    /* keep last snapshot */
-  } finally {
-    sharedInflight -= 1;
+  if (sharedInflight) {
+    if (!force) return sharedInflight;
+    await sharedInflight;
   }
+  const request = performSharedPlanUsageLoad(force).finally(() => {
+    if (sharedInflight === request) sharedInflight = null;
+  });
+  sharedInflight = request;
+  return request;
 }
 
 export function usePlanUsageSnapshot(enabled = true) {
@@ -318,41 +371,27 @@ export function usePlanUsageSnapshot(enabled = true) {
 
   useEffect(() => {
     if (!enabled) return;
+    const restored = restoreStoredUsageSnapshot();
+    if (restored) setSnapshot(restored);
     sharedListeners.add(setSnapshot);
-    if (!sharedTimer) {
-      void loadSharedPlanUsage(false);
-      sharedTimer = setInterval(() => void loadSharedPlanUsage(false), 120_000);
-    } else if (sharedSnapshot) {
-      setSnapshot(sharedSnapshot);
-    } else {
-      void loadSharedPlanUsage(false);
-    }
+    void loadSharedPlanUsage(false);
+
+    if (!sharedTimer) sharedTimer = setInterval(() => void loadSharedPlanUsage(false), USAGE_POLL_MS);
+    const refreshOnFocus = () => {
+      const age = sharedSnapshot ? Date.now() - Date.parse(sharedSnapshot.fetchedAt) : Number.POSITIVE_INFINITY;
+      if (age > 45_000) void loadSharedPlanUsage(false);
+    };
+    window.addEventListener("focus", refreshOnFocus);
+
     return () => {
       sharedListeners.delete(setSnapshot);
+      window.removeEventListener("focus", refreshOnFocus);
       if (sharedListeners.size === 0 && sharedTimer) {
         clearInterval(sharedTimer);
         sharedTimer = null;
       }
     };
   }, [enabled]);
-
-  useEffect(() => {
-    if (!enabled || !snapshot) return;
-    const day = new Date().toISOString().slice(0, 10);
-    for (const alert of lowQuotaAlerts(snapshot)) {
-      const id = `metis-quota-alert:${alert.providerKey}:${alert.windowLabel}:${day}`;
-      try {
-        if (typeof sessionStorage !== "undefined" && sessionStorage.getItem(id)) continue;
-        sessionStorage?.setItem(id, "1");
-      } catch {
-        /* private mode / SSR */
-      }
-      const reset = formatResetAt(alert.resetsAt);
-      toast.warning(`${alert.providerName} quota is low`, {
-        description: `${alert.remainingPct.toFixed(0)}% left on ${alert.windowLabel}${reset ? ` · resets in ${reset}` : ""}`,
-      });
-    }
-  }, [enabled, snapshot]);
 
   const refresh = useCallback(async (force = false) => {
     await loadSharedPlanUsage(force);

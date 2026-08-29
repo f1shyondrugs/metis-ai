@@ -44,19 +44,19 @@
 }
 
 .dark {
-  --background: oklch(0.145 0 0);
+  --background: oklch(0.125 0 0);
   --foreground: oklch(0.985 0 0);
-  --card: oklch(0.18 0 0);
+  --card: oklch(0.155 0 0);
   --card-foreground: oklch(0.985 0 0);
-  --popover: oklch(0.18 0 0);
+  --popover: oklch(0.165 0 0);
   --popover-foreground: oklch(0.985 0 0);
   --primary: oklch(0.922 0 0);
   --primary-foreground: oklch(0.205 0 0);
-  --secondary: oklch(0.24 0 0);
+  --secondary: oklch(0.19 0 0);
   --secondary-foreground: oklch(0.985 0 0);
-  --muted: oklch(0.24 0 0);
+  --muted: oklch(0.19 0 0);
   --muted-foreground: oklch(0.68 0 0);
-  --accent: oklch(0.24 0 0);
+  --accent: oklch(0.205 0 0);
   --accent-foreground: oklch(0.985 0 0);
   --destructive: oklch(0.65 0.2 22);
   --border: oklch(1 0 0 / 10%);
@@ -67,7 +67,7 @@
   --chart-3: oklch(0.439 0 0);
   --chart-4: oklch(0.371 0 0);
   --chart-5: oklch(0.269 0 0);
-  --sidebar: oklch(0.12 0 0);
+  --sidebar: oklch(0.115 0 0);
   --sidebar-foreground: oklch(0.92 0 0);
   --sidebar-primary: oklch(0.92 0 0);
   --sidebar-primary-foreground: oklch(0.145 0 0);
@@ -159,6 +159,30 @@
   }
 }
 
+
+/* Metis product shell: flat surfaces, restrained motion, and compact controls. */
+.metis-shell {
+  letter-spacing: -0.006em;
+}
+
+.metis-shell button,
+.metis-shell input,
+.metis-shell textarea {
+  -webkit-tap-highlight-color: transparent;
+}
+
+.metis-shell [data-slot="dialog-content"],
+.metis-shell [data-slot="popover-content"],
+.metis-shell [data-slot="dropdown-menu-content"] {
+  box-shadow: 0 12px 32px rgb(0 0 0 / 22%);
+}
+
+@media (max-width: 639px) {
+  .metis-shell {
+    --radius: 0.575rem;
+  }
+}
+
 .markdown-body {
   @apply text-sm leading-relaxed text-foreground;
 }
@@ -180,6 +204,80 @@
 
 .markdown-body p:last-child {
   @apply mb-0;
+}
+
+/* Chat answers should read like chat, not like a document page. */
+.assistant-message-text .markdown-body {
+  font-size: 15px;
+  line-height: 1.55;
+  letter-spacing: -0.004em;
+  overflow-wrap: anywhere;
+  text-wrap: pretty;
+}
+
+.assistant-message-text .markdown-body p {
+  margin-block: 0 0.72em;
+}
+
+.assistant-message-text .markdown-body p:last-child {
+  margin-bottom: 0;
+}
+
+.assistant-message-text .markdown-body ul,
+.assistant-message-text .markdown-body ol {
+  margin-block: 0.65em;
+}
+
+.assistant-message-text .markdown-body li {
+  margin-block: 0.2em;
+}
+
+/* Keep chat markdown compact and mobile-safe instead of inheriting document-sized headings. */
+.assistant-message-text .markdown-body h1,
+.assistant-message-text .markdown-body h2 {
+  border-bottom: 0;
+  padding-bottom: 0;
+}
+
+.assistant-message-text .markdown-body h1 {
+  margin: 1.1em 0 0.45em;
+  font-size: 1.45rem;
+  line-height: 1.22;
+}
+
+.assistant-message-text .markdown-body h2 {
+  margin: 1em 0 0.4em;
+  font-size: 1.24rem;
+  line-height: 1.28;
+}
+
+.assistant-message-text .markdown-body h3 {
+  margin: 0.9em 0 0.35em;
+  font-size: 1.08rem;
+  line-height: 1.32;
+}
+
+.assistant-message-text .markdown-body h4,
+.assistant-message-text .markdown-body h5,
+.assistant-message-text .markdown-body h6 {
+  margin: 0.8em 0 0.3em;
+  font-size: 1rem;
+  line-height: 1.35;
+}
+
+.assistant-message-text .markdown-body table {
+  display: block;
+  max-width: 100%;
+  overflow-x: auto;
+  overscroll-behavior-inline: contain;
+  scrollbar-width: thin;
+}
+
+.assistant-message-text .markdown-body th,
+.assistant-message-text .markdown-body td {
+  min-width: 5.5rem;
+  white-space: normal;
+  overflow-wrap: anywhere;
 }
 
 .markdown-body ul {
@@ -437,6 +535,18 @@
   left: 3rem;
 }
 
+@media (max-width: 639px) {
+  .composer-single-line {
+    min-height: 56px;
+  }
+
+  .composer-single-line .composer-input-area {
+    right: 6rem;
+    bottom: 0.625rem;
+    left: 3.5rem;
+  }
+}
+
 @keyframes caret-blink {
   0%,
   100% {
@@ -568,6 +678,18 @@
 .user-message-collapse-mask {
   -webkit-mask-image: linear-gradient(to bottom, #000 0%, #000 calc(100% - 3.25rem), transparent 100%);
   mask-image: linear-gradient(to bottom, #000 0%, #000 calc(100% - 3.25rem), transparent 100%);
+}
+
+@media (max-width: 767px) {
+  .metis-sidebar-scroll,
+  .project-home-scroll {
+    scrollbar-width: none;
+  }
+
+  .metis-sidebar-scroll::-webkit-scrollbar,
+  .project-home-scroll::-webkit-scrollbar {
+    display: none;
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {

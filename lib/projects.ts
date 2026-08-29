@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { getAgentCwd } from "@/lib/mcp";
 import {
@@ -303,6 +303,15 @@ export function deleteProjectFile(projectId: string, fileId: string, ownerId?: s
  return getDatabase().prepare("DELETE FROM project_files WHERE id = ? AND project_id = ?").run(fileId, projectId).changes > 0;
 }
 
+export function slug(value: string) {
+ return value
+  .trim()
+  .toLowerCase()
+  .replace(/[^a-z0-9]+/g, "-")
+  .replace(/^-+|-+$/g, "")
+  .slice(0, 80) || "project";
+}
+
 export function searchProjects(query: string, ownerId?: string): Project[] {
  const needle = query.trim().toLocaleLowerCase();
  if (!needle) return listProjects(ownerId);
@@ -323,24 +332,34 @@ function listProjectNotes(projectId: string, ownerId?: string): SharedNote[] {
   .filter((note): note is SharedNote => Boolean(note?.id));
 }
 
+export function projectAgentsFilePath(project: Project, ownerId?: string) {
+ const candidates = [
+  path.join(getAgentCwd(ownerId), slug(project.name), "AGENTS.md"),
+  path.join(getAgentCwd(ownerId), project.id, "AGENTS.md"),
+ ];
+ return candidates.find((candidate) => existsSync(candidate) && statSync(candidate).isFile()) || null;
+}
+
 export function projectContextBlock(project: Project, ownerId?: string, chats?: ChatIndexEntry[]) {
  const files = listProjectFiles(project.id, ownerId);
  const notes = listProjectNotes(project.id, ownerId);
  const projectChats = (chats || listChatsForUser(ownerId)).filter((chat) => chat.projectId === project.id);
+ const agentsFile = projectAgentsFilePath(project, ownerId);
  return [
   `Active project: ${project.name}`,
   `Project instructions override the user's global custom instructions while this chat is in the project:\n${project.instructions || "(none)"}`,
   project.memoryMode === "project_only"
    ? "Memory mode is project_only: do not use global memories or personal context-hub facts. Stay inside this project's instructions, files, notes, and chats."
    : "Memory mode is default: global memories still apply, plus this project's files and notes.",
+  agentsFile ? `Project agent instructions file (read it with file tools when needed): ${agentsFile}` : "Project agent instructions file: (not found)",
   files.length
-   ? `Project files:\n${files.slice(0, 12).map((file) => `- ${file.name} (${file.mimeType})${file.text ? `\n${file.text.slice(0, 4_000)}` : ""}`).join("\n")}`
+   ? `Project files (metadata only; read/search the relevant file with tools when needed):\n${files.slice(0, 24).map((file) => `- ${file.name} (${file.mimeType}, ${file.size} bytes, id=${file.id})`).join("\n")}`
    : "Project files: (none)",
   notes.length
-   ? `Project notes:\n${notes.slice(0, 16).map((note) => `- ${note.title || "Untitled"}:\n${(note.content || "").slice(0, 2_000)}`).join("\n\n")}`
+   ? `Pinned project notes:\n${notes.slice(0, 16).map((note) => `- ${note.title || "Untitled"}:\n${(note.content || "").slice(0, 2_000)}`).join("\n\n")}`
    : "Project notes: (none)",
   projectChats.length
-   ? `Other chats in this project:\n${projectChats.slice(0, 20).map((chat) => `- ${chat.title || "Untitled"} (${chat.id})`).join("\n")}`
+   ? `Active chats in this project (titles only; use tools to inspect their content):\n${projectChats.slice(0, 20).map((chat) => `- ${chat.title || "Untitled"} (${chat.id})`).join("\n")}`
    : "",
   "New notes created from this chat inherit this projectId. Do not create a canvas kind=project note in place of a sidebar project.",
  ].filter(Boolean).join("\n\n");

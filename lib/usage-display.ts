@@ -20,6 +20,7 @@ export type UsageProvider = {
 export type UsageSnapshot = {
   providers: UsageProvider[];
   fetchedAt: string;
+  refreshing?: boolean;
 };
 
 export type UsageSelection = {

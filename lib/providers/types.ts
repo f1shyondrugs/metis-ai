@@ -41,6 +41,8 @@ export type ProviderModelDefinition = {
   displayName: string;
   description?: string;
   contextWindow?: number;
+  contextWindowSource?: "provider" | "runtime" | "stored-provider" | "registry" | "catalog" | "inferred";
+  maxOutputTokens?: number;
   capabilities?: Partial<ProviderCapabilities>;
   tags?: string[];
   parameters?: ReadonlyArray<ProviderModelParameter>;

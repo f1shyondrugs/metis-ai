@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+// eslint-disable-next-line @typescript-eslint/no-require-imports -- CommonJS test fixture
 const { createInterface } = require("node:readline");
 const rl = createInterface({ input: process.stdin });
 rl.on("line", (line) => {

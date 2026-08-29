@@ -35,21 +35,21 @@ function formatBytes(size: number) {
 function ProjectHomeSkeleton() {
  return (
  <div
- className="mx-auto flex h-full min-h-0 w-full max-w-2xl flex-col gap-8 overflow-hidden px-6 py-8"
+ className="mx-auto flex h-full min-h-0 w-full max-w-2xl flex-col gap-6 overflow-hidden px-4 py-5 sm:gap-8 sm:px-6 sm:py-8"
  aria-busy="true"
  aria-label="Loading project"
  data-slot="project-home-skeleton"
  >
- <header className="flex items-start gap-4">
- <div className="size-14 shrink-0 animate-pulse rounded-lg bg-muted" />
- <div className="min-w-0 flex-1 space-y-2">
+ <header className="grid grid-cols-[3.5rem_minmax(0,1fr)] items-start gap-x-3 gap-y-4 sm:grid-cols-[3.5rem_minmax(0,1fr)_auto] sm:gap-4">
+ <div className="size-14 shrink-0 animate-pulse rounded-xl bg-muted" />
+ <div className="min-w-0 space-y-2">
  <div className="h-8 w-2/3 animate-pulse rounded-md bg-muted" />
  <p className="text-sm text-muted-foreground">Loading project…</p>
  <div className="h-3 w-40 animate-pulse rounded bg-muted" />
  </div>
- <div className="flex shrink-0 gap-2">
- <div className="h-9 w-24 animate-pulse rounded-md bg-muted" />
- <div className="h-9 w-20 animate-pulse rounded-md bg-muted" />
+ <div className="col-span-2 grid grid-cols-2 gap-2 sm:col-span-1 sm:flex sm:shrink-0">
+ <div className="h-9 min-w-0 animate-pulse rounded-md bg-muted sm:w-24" />
+ <div className="h-9 min-w-0 animate-pulse rounded-md bg-muted sm:w-20" />
  </div>
  </header>
  <div className="h-28 animate-pulse rounded-xl border border-border/40 bg-muted/40" />
@@ -224,8 +224,8 @@ export function ProjectHome({
  if (!data || data.project.id !== projectId) return <ProjectHomeSkeleton />;
 
  return (
-  <div className="mx-auto flex h-full min-h-0 w-full max-w-2xl flex-col gap-8 overflow-y-auto px-6 py-8">
-   <header className="flex items-start gap-4">
+  <div className="project-home-scroll mx-auto flex h-full min-h-0 w-full max-w-2xl flex-col gap-6 overflow-y-auto px-4 py-5 sm:gap-8 sm:px-6 sm:py-8">
+   <header className="grid grid-cols-[3.5rem_minmax(0,1fr)] items-start gap-x-3 gap-y-4 sm:grid-cols-[3.5rem_minmax(0,1fr)_auto] sm:gap-4">
     <button
      type="button"
      className="group relative shrink-0"
@@ -255,9 +255,9 @@ export function ProjectHome({
       if (file) void uploadLogo(file);
      }}
     />
-    <div className="min-w-0 flex-1">
+    <div className="min-w-0 self-center sm:self-start">
      <Input
-      className="h-auto border-none px-0 text-2xl font-semibold tracking-tight shadow-none focus-visible:ring-0"
+      className="h-auto min-w-0 border-none px-0 text-[1.35rem] font-semibold tracking-tight shadow-none focus-visible:ring-0 sm:text-2xl"
       value={name}
       onChange={(event) => setName(event.target.value)}
       onBlur={() => {
@@ -268,12 +268,12 @@ export function ProjectHome({
       {data.chats.length} chats · {data.files.length} files · {data.notes.length} notes
      </p>
     </div>
-    <div className="flex shrink-0 gap-2">
-     <Button type="button" onClick={() => onNewChat(projectId)}>
+    <div className="col-span-2 grid grid-cols-2 gap-2 sm:col-span-1 sm:flex sm:shrink-0">
+     <Button type="button" className="min-w-0" onClick={() => onNewChat(projectId)}>
       <Plus className="size-4" />
       New chat
      </Button>
-     <Button type="button" variant="destructive" onClick={() => setDeleteOpen(true)}>
+     <Button type="button" variant="destructive" className="min-w-0" onClick={() => setDeleteOpen(true)}>
       <Trash2 className="size-4" />
       Delete
      </Button>
@@ -352,12 +352,13 @@ export function ProjectHome({
 
    <section className="grid gap-2">
     <h3 className="text-sm font-medium">Memory</h3>
-    <div className="flex flex-wrap gap-2">
+    <div className="grid grid-cols-2 gap-2 sm:flex sm:flex-wrap">
      {(["default", "project_only"] as const).map((mode) => (
       <Button
        key={mode}
        type="button"
        variant={memoryMode === mode ? "default" : "outline"}
+       className="min-w-0 px-2.5 text-xs sm:px-4 sm:text-sm"
        onClick={() => {
         setMemoryMode(mode);
         void save({ memoryMode: mode });

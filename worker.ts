@@ -174,6 +174,17 @@ function runJobInIsolatedProcess(claimedJob: Awaited<ReturnType<typeof claimNext
       if (timeout) clearTimeout(timeout);
       if (forceKillTimer) clearTimeout(forceKillTimer);
       if (code === 0) {
+        const current = getJob(jobId);
+        if (current?.status === "running") {
+          const message =
+            "Isolated worker exited cleanly without publishing a terminal run state.";
+          if (requeueUnexpectedCrash(message)) {
+            console.warn(`[ai-chat-worker] ${message} Requeued ${jobId} from its durable checkpoint.`);
+            resolveProcess();
+            return;
+          }
+          markFailed(message);
+        }
         resolveProcess();
         return;
       }

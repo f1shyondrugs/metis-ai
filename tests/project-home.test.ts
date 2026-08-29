@@ -29,6 +29,18 @@ test("switching project hubs remounts, clears stale data, and aborts the previou
 });
 
 test("project hub uploads files as multipart FormData", () => {
- assert.match(homeSource, /const form = new FormData\(\)/);
- assert.match(homeSource, /form\.set\("file", file, file\.name\)/);
+  assert.match(homeSource, /const form = new FormData\(\)/);
+  assert.match(homeSource, /form\.set\("file", file, file\.name\)/);
+});
+
+test("project hub header stays usable on narrow screens", () => {
+  assert.match(homeSource, /grid-cols-\[3\.5rem_minmax\(0,1fr\)\]/);
+  assert.match(homeSource, /col-span-2 grid grid-cols-2 gap-2 sm:col-span-1/);
+  assert.match(homeSource, /project-home-scroll/);
+});
+
+test("the unfiltered project chip is labelled All instead of None", () => {
+  const projectNavSource = readFileSync(new URL("../components/project-nav.tsx", import.meta.url), "utf8");
+  assert.match(projectNavSource, />\s*All\s*<\/button>/);
+  assert.doesNotMatch(projectNavSource, />\s*None\s*<\/button>/);
 });

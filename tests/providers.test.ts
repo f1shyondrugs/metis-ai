@@ -142,3 +142,38 @@ test("voice OpenAI connections stay out of the chat picker", () => {
  assert.equal(isVoiceOnlyProviderConnection({ slug: "openai-work", label: "OpenAI", config: { purpose: "chat" } }), false);
  assert.equal(isVoiceOnlyProviderConnection({ slug: "cursor-main", label: "Cursor", config: {} }), false);
 });
+
+test("Codex diagnostic error items do not render as fake tool errors", () => {
+  assert.equal(
+    codexTool({
+      id: "diagnostic-1",
+      type: "error",
+      message: "Ignored unsupported project-local config keys",
+    }),
+    null,
+  );
+});
+
+test("Codex todo_list items render as a Tasks state snapshot", () => {
+  const tool = codexTool({
+    id: "todo-1",
+    type: "todo_list",
+    items: [
+      { text: "Inspect repository", completed: true },
+      { text: "Run targeted checks", completed: false },
+      { text: "Create pull request", status: "in_progress" },
+    ],
+  }, "running");
+
+  assert.equal(tool?.name, "Tasks");
+  assert.equal(tool?.kind, "todo");
+  assert.equal(tool?.status, "completed");
+  assert.deepEqual(
+    tool?.todos?.map((item) => [item.content, item.status]),
+    [
+      ["Inspect repository", "completed"],
+      ["Run targeted checks", "pending"],
+      ["Create pull request", "in_progress"],
+    ],
+  );
+});

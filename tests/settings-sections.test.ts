@@ -52,3 +52,19 @@ test("browser storage uses a dedicated manager instead of an inline origin list 
   assert.match(settingsSource, /placeholder="Search websites"/);
   assert.match(settingsSource, /if \(item\.id === "settings-browser-storage"\) \{\s*setSettingsPane\("browser-storage"\);/);
 });
+
+test("provider editing stays inside the Models settings tab and OAuth names can be saved without reconnecting", () => {
+  const editStart = settingsSource.indexOf("function editProviderConnection");
+  const editEnd = settingsSource.indexOf("async function saveProviderConnection", editStart);
+  const editBlock = settingsSource.slice(editStart, editEnd);
+  assert.match(editBlock, /onSettingsTabChange\("models"\)/);
+  assert.doesNotMatch(editBlock, /onSettingsTabChange\("providers"\)/);
+
+  const oauthControls = settingsSource.slice(
+    settingsSource.indexOf('{providerDraft.authType === "oauth" ? ('),
+    settingsSource.indexOf(') : (', settingsSource.indexOf('{providerDraft.authType === "oauth" ? (')),
+  );
+  assert.match(oauthControls, /Save changes/);
+  assert.match(oauthControls, /saveProviderConnection/);
+  assert.match(oauthControls, /Reconnect OAuth/);
+});

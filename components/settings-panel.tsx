@@ -1,6 +1,6 @@
 "use client";
 
-import { Fragment, useCallback, useEffect, useState, type ChangeEvent } from "react";
+import { Fragment, useCallback, useEffect, useRef, useState, type ChangeEvent } from "react";
 import {
   Archive,
   ArchiveRestore,
@@ -504,6 +504,7 @@ export function SettingsPanel({
   const [providerDefinitions, setProviderDefinitions] = useState<ProviderDefinition[]>([]);
   const [providerConnections, setProviderConnections] = useState<ProviderConnection[]>([]);
   const [providersLoaded, setProvidersLoaded] = useState(false);
+  const providerLoadVersionRef = useRef(0);
   const [providerDraft, setProviderDraft] = useState({
     id: "",
     providerKey: "openai",
@@ -740,6 +741,7 @@ export function SettingsPanel({
   }, []);
 
   const loadProviders = useCallback(async () => {
+    const loadVersion = ++providerLoadVersionRef.current;
     setProvidersLoaded(false);
     try {
       const res = await fetch("/api/providers", { cache: "no-store" });
@@ -748,6 +750,7 @@ export function SettingsPanel({
         providers?: ProviderDefinition[];
         connections?: ProviderConnection[];
       };
+      if (loadVersion !== providerLoadVersionRef.current) return;
       setProviderDefinitions(data.providers || []);
       setProviderConnections(data.connections || []);
       const first = data.providers?.[0];
@@ -765,9 +768,11 @@ export function SettingsPanel({
         });
       }
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Failed to load providers");
+      if (loadVersion === providerLoadVersionRef.current) {
+        toast.error(error instanceof Error ? error.message : "Failed to load providers");
+      }
     } finally {
-      setProvidersLoaded(true);
+      if (loadVersion === providerLoadVersionRef.current) setProvidersLoaded(true);
     }
   }, []);
 
@@ -1022,7 +1027,7 @@ export function SettingsPanel({
       project: typeof connection.config?.project === "string" ? connection.config.project : "",
       location: typeof connection.config?.location === "string" ? connection.config.location : "",
     });
-    onSettingsTabChange("providers");
+    onSettingsTabChange("models");
     requestAnimationFrame(() => {
       document.getElementById("provider-connection-form")?.scrollIntoView({ behavior: "smooth", block: "center" });
     });
@@ -1032,28 +1037,40 @@ export function SettingsPanel({
     if (providerBusy) return;
     setProviderBusy(true);
     try {
-      const body: Record<string, unknown> = {
-        ...(providerDraft.id ? { id: providerDraft.id } : {}),
-        providerKey: providerDraft.providerKey,
-        slug: providerDraft.slug.trim(),
-        label: providerDraft.label.trim(),
-        authType: providerDraft.authType,
-        ...(providerDraft.baseUrl.trim() ? { baseUrl: providerDraft.baseUrl.trim() } : {}),
-        ...(providerDraft.secret ? { secret: providerDraft.secret } : {}),
-        ...(providerDraft.authType === "vertex_adc"
+      const editableConfig =
+        providerDraft.authType === "vertex_adc" ||
+        (providerDraft.providerKey === "antigravity" && providerDraft.authType === "oauth")
           ? {
-              config: {
-                ...(providerDraft.project.trim() ? { project: providerDraft.project.trim() } : {}),
-                ...(providerDraft.location.trim() ? { location: providerDraft.location.trim() } : {}),
-              },
+              ...(providerDraft.project.trim() ? { project: providerDraft.project.trim() } : {}),
+              ...(providerDraft.authType === "vertex_adc" && providerDraft.location.trim()
+                ? { location: providerDraft.location.trim() }
+                : {}),
             }
-          : {}),
-      };
-      const res = await fetch("/api/providers", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(body),
-      });
+          : undefined;
+      const body: Record<string, unknown> = providerDraft.id
+        ? {
+            label: providerDraft.label.trim(),
+            ...(providerDraft.authType !== "oauth" ? { baseUrl: providerDraft.baseUrl.trim() } : {}),
+            ...(providerDraft.secret ? { secret: providerDraft.secret } : {}),
+            ...(editableConfig ? { config: editableConfig } : {}),
+          }
+        : {
+            providerKey: providerDraft.providerKey,
+            slug: providerDraft.slug.trim(),
+            label: providerDraft.label.trim(),
+            authType: providerDraft.authType,
+            ...(providerDraft.baseUrl.trim() ? { baseUrl: providerDraft.baseUrl.trim() } : {}),
+            ...(providerDraft.secret ? { secret: providerDraft.secret } : {}),
+            ...(editableConfig ? { config: editableConfig } : {}),
+          };
+      const res = await fetch(
+        providerDraft.id ? `/api/providers/${encodeURIComponent(providerDraft.id)}` : "/api/providers",
+        {
+          method: providerDraft.id ? "PATCH" : "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(body),
+        },
+      );
       const data = (await res.json().catch(() => ({}))) as {
         connection?: ProviderConnection;
         error?: string;
@@ -1212,15 +1229,34 @@ export function SettingsPanel({
 
   async function deleteProviderConnection(connection: ProviderConnection) {
     const res = await fetch(`/api/providers/${encodeURIComponent(connection.id)}`, { method: "DELETE" });
+    const data = (await res.json().catch(() => ({}))) as { error?: string };
     if (!res.ok) {
-      toast.error("Failed to delete provider connection");
+      toast.error(data.error || "Failed to delete provider connection");
       return;
     }
-    await loadProviders();
-    onModelsChanged?.();
+
+    // Remove it from the visible settings state immediately. A slower, older
+    // providers request must not be able to resurrect a connection that was
+    // already deleted.
+    providerLoadVersionRef.current += 1;
+    setProviderConnections((current) => current.filter((item) => item.id !== connection.id));
     if (providerDraft.id === connection.id) {
-      setProviderDraft((current) => ({ ...current, id: "", secret: "" }));
+      const definition = providerDefinitions.find((provider) => provider.key === connection.providerKey);
+      setProviderDraft((current) => ({
+        ...current,
+        id: "",
+        slug: `${connection.providerKey}-main`,
+        label: definition?.name || connection.providerKey,
+        authType: definition ? preferredAuthType(definition) : current.authType,
+        baseUrl: definition?.defaultBaseUrl || "",
+        secret: "",
+        project: "",
+        location: "",
+      }));
     }
+    onModelsChanged?.();
+    void onRefreshUsage();
+    await loadProviders();
     toast.success("Provider connection deleted");
   }
 
@@ -1853,6 +1889,7 @@ export function SettingsPanel({
                     value={providerDraft.providerKey}
                     onValueChange={selectProvider}
                     ariaLabel="Provider"
+                    disabled={Boolean(providerDraft.id)}
                     className="w-full"
                     options={selectableProviders.map((provider) => ({
                       value: provider.key,
@@ -1864,6 +1901,7 @@ export function SettingsPanel({
                     value={providerDraft.authType}
                     onValueChange={(authType) => setProviderDraft((current) => ({ ...current, authType }))}
                     ariaLabel="Authentication method"
+                    disabled={Boolean(providerDraft.id)}
                     className="w-full"
                     options={(providerDefinitions.find((provider) => provider.key === providerDraft.providerKey)?.authTypes || ["api_key"]).map((authType) => ({
                       value: authType,
@@ -1949,11 +1987,18 @@ export function SettingsPanel({
                 ) : null}
                 <div className="flex flex-wrap gap-2">
                 {providerDraft.authType === "oauth" ? (
-                  <Button type="button" onClick={() => void connectProviderOAuth()} disabled={providerBusy || !providersLoaded}>
-                    {providerBusy ? "Connecting…" : providerDraft.id ? `Reconnect ${providerDraft.label || "connection"}` : "Connect via OAuth"}
-                  </Button>
+                  <>
+                    {providerDraft.id ? (
+                      <Button type="button" onClick={() => void saveProviderConnection()} disabled={providerBusy || !providersLoaded || !providerDraft.label.trim()}>
+                        {providerBusy ? "Saving…" : "Save changes"}
+                      </Button>
+                    ) : null}
+                    <Button type="button" variant={providerDraft.id ? "outline" : "default"} onClick={() => void connectProviderOAuth()} disabled={providerBusy || !providersLoaded}>
+                      {providerBusy ? "Connecting…" : providerDraft.id ? "Reconnect OAuth" : "Connect via OAuth"}
+                    </Button>
+                  </>
                 ) : (
-                    <Button type="button" onClick={() => void saveProviderConnection()} disabled={providerBusy || !providersLoaded}>
+                    <Button type="button" onClick={() => void saveProviderConnection()} disabled={providerBusy || !providersLoaded || !providerDraft.label.trim()}>
                       {providerBusy ? "Saving…" : providerDraft.id ? "Update connection" : "Save connection"}
                     </Button>
                   )}

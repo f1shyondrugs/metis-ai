@@ -98,3 +98,54 @@ test("localWebSearch queries SearXNG JSON and normalizes results", async () => {
     engine: "brave",
   }]);
 });
+
+import { localWebFetch } from "../lib/mcp-core/local-scraper.mjs";
+
+test("localWebFetch sends bounded URL batches to the local scraper", async () => {
+  const calls: Array<{ url: string; init?: RequestInit }> = [];
+  const result = await localWebFetch({
+    urls: ["https://example.com/a", "https://example.com/b"],
+    endpoint: "http://127.0.0.1:8890/fetch",
+    fetchImpl: async (input, init) => {
+      calls.push({ url: String(input), init });
+      return new Response(JSON.stringify({
+        ok: true,
+        source: "local-scrapling-static",
+        results: [
+          { ok: true, source: "local-scrapling-static", url: "https://example.com/a", content: "A" },
+          { ok: true, source: "local-scrapling-static", url: "https://example.com/b", content: "B" },
+        ],
+      }), { status: 200, headers: { "content-type": "application/json" } });
+    },
+  });
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].url, "http://127.0.0.1:8890/fetch");
+  const body = JSON.parse(String(calls[0].init?.body));
+  assert.deepEqual(body.urls, ["https://example.com/a", "https://example.com/b"]);
+  assert.equal(result.results.length, 2);
+});
+
+test("localWebSearch falls back to the local Scrapling search parser when SearXNG is down", async () => {
+  const calls: string[] = [];
+  const result = await localWebSearch({
+    query: "OpenAI",
+    numResults: 2,
+    endpoint: "http://127.0.0.1:8888/search",
+    scraperEndpoint: "http://127.0.0.1:8890/search",
+    fetchImpl: async (input, init) => {
+      calls.push(String(input));
+      if (calls.length === 1) throw new Error("searx offline");
+      assert.equal(init?.method, "POST");
+      return new Response(JSON.stringify({
+        source: "local-scrapling-bing",
+        query: "OpenAI",
+        results: [
+          { title: "OpenAI", url: "https://openai.com/", content: "Research", engine: "bing" },
+        ],
+      }), { status: 200, headers: { "content-type": "application/json" } });
+    },
+  });
+  assert.deepEqual(calls, ["http://127.0.0.1:8888/search?q=OpenAI&format=json&categories=general&pageno=1", "http://127.0.0.1:8890/search"]);
+  assert.equal(result.source, "local-scrapling-bing");
+  assert.equal(result.results[0].url, "https://openai.com/");
+});

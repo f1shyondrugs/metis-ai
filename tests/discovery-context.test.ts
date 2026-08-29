@@ -24,7 +24,7 @@ test("parseDiscoveredModel keeps API context windows and does not infer", () => 
   assert.equal(openai?.contextWindowDiscovered, undefined);
 });
 
-test("mergeDiscoveredContextWindow prefers live API, then catalog, then stored", () => {
+test("mergeDiscoveredContextWindow prefers live API, then stored provider metadata, then catalog", () => {
   assert.equal(mergeDiscoveredContextWindow({
     discovered: 2_000_000,
     stored: 128_000,
@@ -33,7 +33,7 @@ test("mergeDiscoveredContextWindow prefers live API, then catalog, then stored",
   assert.equal(mergeDiscoveredContextWindow({
     stored: 202_752,
     catalog: 200_000,
-  }), 200_000);
+  }), 202_752);
   assert.equal(mergeDiscoveredContextWindow({
     stored: 202_752,
   }), 202_752);
@@ -41,7 +41,7 @@ test("mergeDiscoveredContextWindow prefers live API, then catalog, then stored",
     discovered: 0,
  catalog: 202_752,
  stored: 128_000,
- }), 202_752);
+ }), 128_000);
  assert.equal(mergeDiscoveredContextWindow({
  catalog: 400_000,
   }), 400_000);

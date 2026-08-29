@@ -366,6 +366,27 @@ export function getDatabase(): DatabaseSync {
       data TEXT NOT NULL,
       created_at TEXT NOT NULL
     );
+    CREATE TABLE IF NOT EXISTS pending_approvals (
+      id TEXT PRIMARY KEY,
+      job_id TEXT,
+      chat_id TEXT NOT NULL REFERENCES chats(id) ON DELETE CASCADE,
+      owner_id TEXT REFERENCES users(id) ON DELETE CASCADE,
+      status TEXT NOT NULL DEFAULT 'waiting_for_user'
+        CHECK (status IN ('waiting_for_user', 'resolved')),
+      title TEXT NOT NULL,
+      command TEXT,
+      files_json TEXT NOT NULL DEFAULT '[]',
+      created_at TEXT NOT NULL,
+      heartbeat_at TEXT,
+      resolved_at TEXT,
+      decision TEXT,
+      session_scope TEXT,
+      version INTEGER NOT NULL DEFAULT 1
+    );
+    CREATE INDEX IF NOT EXISTS pending_approvals_chat_status
+      ON pending_approvals(chat_id, status, created_at DESC);
+    CREATE INDEX IF NOT EXISTS pending_approvals_job_status
+      ON pending_approvals(job_id, status);
     CREATE TABLE IF NOT EXISTS idempotency_keys (
       scope TEXT NOT NULL,
       key TEXT NOT NULL,
@@ -554,6 +575,12 @@ export function getDatabase(): DatabaseSync {
   }
   database.exec(
     "CREATE INDEX IF NOT EXISTS pending_questions_status_expiry ON pending_questions(status, expires_at)",
+  );
+  database.exec(
+    "CREATE INDEX IF NOT EXISTS pending_approvals_chat_status ON pending_approvals(chat_id, status, created_at DESC)",
+  );
+  database.exec(
+    "CREATE INDEX IF NOT EXISTS pending_approvals_job_status ON pending_approvals(job_id, status)",
   );
   try {
     database.prepare(

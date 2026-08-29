@@ -132,3 +132,13 @@ export const SSE_HEADERS = {
   Connection: "keep-alive",
   "X-Accel-Buffering": "no",
 } as const;
+
+export interface RuntimeSseEvent {
+  event: "runtime";
+  id?: number;
+  data: unknown;
+}
+
+export function encodeRuntimeSseEvent(evt: RuntimeSseEvent): string {
+  return `${evt.id === undefined ? "" : `id: ${evt.id}\n`}event: ${evt.event}\ndata: ${JSON.stringify(evt.data)}\n\n`;
+}

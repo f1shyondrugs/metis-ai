@@ -1,5 +1,6 @@
 import { getAuthenticatedUserId, isAuthenticated } from "@/lib/auth";
 import { requestJobCancel } from "@/lib/db-jobs";
+import { resolveApproval } from "@/lib/db-approvals";
 import { cancelQuestion } from "@/lib/db-questions";
 import { getChat, updateChat, upsertMessage } from "@/lib/db-store";
 
@@ -11,12 +12,17 @@ export async function POST(req: Request) {
   }
   const body = (await req.json().catch(() => ({}))) as { chatId?: string };
   const chatId = body.chatId?.trim();
-  if (!chatId) return Response.json({ error: "chatId is required" }, { status: 400 });
-  const userId = await getAuthenticatedUserId(req) ?? undefined;
+  if (!chatId)
+    return Response.json({ error: "chatId is required" }, { status: 400 });
+  const userId = (await getAuthenticatedUserId(req)) ?? undefined;
   const initialChat = getChat(chatId, userId);
-  if (!initialChat) return Response.json({ error: "Not found" }, { status: 404 });
+  if (!initialChat)
+    return Response.json({ error: "Not found" }, { status: 404 });
   if (initialChat.pendingQuestion?.questionId) {
     cancelQuestion(initialChat.pendingQuestion.questionId, userId);
+  }
+  if (initialChat.pendingApproval?.id) {
+    resolveApproval(initialChat.pendingApproval.id, "deny", userId);
   }
 
   const cancelled = requestJobCancel(chatId, userId);
@@ -34,7 +40,11 @@ export async function POST(req: Request) {
   const chat = getChat(chatId, userId);
   const latestAssistant = [...(chat?.messages || [])]
     .reverse()
-    .find((message) => message.role === "assistant" && message.tools?.some((tool) => tool.status === "running"));
+    .find(
+      (message) =>
+        message.role === "assistant" &&
+        message.tools?.some((tool) => tool.status === "running"),
+    );
   if (latestAssistant?.tools) {
     upsertMessage(chatId, {
       ...latestAssistant,
@@ -43,10 +53,15 @@ export async function POST(req: Request) {
       ),
     });
   }
-  updateChat(chatId, {
-    runStatus: "cancelled",
-    runUpdatedAt: new Date().toISOString(),
-    pendingQuestion: null,
-  }, userId);
+  updateChat(
+    chatId,
+    {
+      runStatus: "cancelled",
+      runUpdatedAt: new Date().toISOString(),
+      pendingQuestion: null,
+      pendingApproval: null,
+    },
+    userId,
+  );
   return Response.json({ ok: true, status: "cancel-requested" });
 }

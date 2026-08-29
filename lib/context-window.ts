@@ -227,9 +227,10 @@ export function contextWindowForSelection(
   } | null | undefined,
   params?: ReadonlyArray<{ id: string; value: string }> | null,
 ): number | undefined {
+  const isContextParam = (id: string) => id === "context" || id === "contextWindow" || id === "context_window";
   const contextValue =
-    params?.find((param) => param.id === "context")?.value ||
-    model?.defaultParams?.find((param) => param.id === "context")?.value;
+    params?.find((param) => isContextParam(param.id))?.value ||
+    model?.defaultParams?.find((param) => isContextParam(param.id))?.value;
   const normalizedContextValue = contextValue?.trim().toLowerCase();
  if (normalizedContextValue === "max" || normalizedContextValue === "unlimited") {
     return contextWindowForModel(model);

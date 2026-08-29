@@ -353,6 +353,8 @@ export function saveProviderModels(
     parameters?: ProviderModelDefinition["parameters"];
     defaultParams?: ProviderModelDefinition["defaultParams"];
     tags?: string[];
+    contextWindowSource?: ProviderModelDefinition["contextWindowSource"];
+    maxOutputTokens?: number;
   }>,
 ) {
   const db = getDatabase();
@@ -370,6 +372,10 @@ export function saveProviderModels(
         ...(model.parameters ? { __parameters: model.parameters } : {}),
         ...(model.defaultParams ? { __defaultParams: model.defaultParams } : {}),
         ...(model.tags ? { __tags: model.tags } : {}),
+        ...(model.contextWindowSource ? { __contextWindowSource: model.contextWindowSource } : {}),
+        ...(typeof model.maxOutputTokens === "number" && model.maxOutputTokens > 0
+          ? { __maxOutputTokens: Math.round(model.maxOutputTokens) }
+          : {}),
       };
       insert.run(
         connectionId,
@@ -384,6 +390,12 @@ export function saveProviderModels(
       );
     }
   });
+}
+
+function providerContextWindowSource(value: unknown): ProviderModelDefinition["contextWindowSource"] | undefined {
+  return value === "provider" || value === "runtime" || value === "stored-provider" || value === "registry" || value === "catalog" || value === "inferred"
+    ? value
+    : undefined;
 }
 
 export function listProviderModels(connectionId: string) {
@@ -426,6 +438,12 @@ export function listProviderModels(connectionId: string) {
       ...(Array.isArray(capabilities.__parameters) ? { parameters: capabilities.__parameters } : {}),
       ...(Array.isArray(capabilities.__defaultParams) ? { defaultParams: capabilities.__defaultParams } : {}),
       ...(Array.isArray(capabilities.__tags) ? { tags: capabilities.__tags } : {}),
+      ...(providerContextWindowSource(capabilities.__contextWindowSource)
+        ? { contextWindowSource: providerContextWindowSource(capabilities.__contextWindowSource) }
+        : {}),
+      ...(typeof capabilities.__maxOutputTokens === "number" && capabilities.__maxOutputTokens > 0
+        ? { maxOutputTokens: Math.round(capabilities.__maxOutputTokens) }
+        : {}),
       discoveredAt: value.discoveredAt,
     };
   });

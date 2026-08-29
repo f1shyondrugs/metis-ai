@@ -19,7 +19,8 @@ import {
   scheduleProviderModelRefresh,
 } from "@/lib/providers/discovery";
 import { modelKey } from "@/lib/providers/types";
-import { contextWindowForModel, contextWindowOf as providerContextWindow } from "@/lib/context-window";
+import { contextWindowOf as providerContextWindow } from "@/lib/context-window";
+import { resolveModelContextMetadata } from "@/lib/model-context-metadata";
 import { getVerifiedProviderCapabilities } from "@/lib/providers/registry";
 
 export const runtime = "nodejs";
@@ -55,6 +56,8 @@ export type ModelInfo = {
   parameters?: ModelParameter[];
   defaultParams?: ModelParamSelection[];
   contextWindow?: number;
+  contextWindowSource?: "provider" | "runtime" | "stored-provider" | "registry" | "catalog" | "inferred";
+  maxOutputTokens?: number;
 };
 
 
@@ -94,7 +97,7 @@ export async function GET(req: Request) {
       const listed = await Cursor.models.list({ apiKey });
       const storedById = cursorConnection
         ? new Map(listProviderModels(cursorConnection.id).map((model) => [model.id, model]))
-        : new Map<string, { contextWindow?: number }>();
+        : new Map<string, { contextWindow?: number; contextWindowSource?: ModelInfo["contextWindowSource"] }>();
       cursorModels = listed.map((m) => {
         const defaultVariant =
           m.variants?.find((v) => v.isDefault) ?? m.variants?.[0];
@@ -110,12 +113,18 @@ export async function GET(req: Request) {
           .filter((p) => p.id !== "cyber")
           .map((p) => ({ id: p.id, value: p.value }));
         const discoveredWindow = providerContextWindow(m);
-        const storedWindow = storedById.get(m.id)?.contextWindow;
-        const contextWindow = contextWindowForModel({
- id: m.id,
- displayName: m.displayName || m.id,
- contextWindow: discoveredWindow || storedWindow,
- });
+        const storedModel = storedById.get(m.id);
+        const metadata = cursorConnection
+          ? resolveModelContextMetadata({
+              connection: cursorConnection,
+              modelId: m.id,
+              displayName: m.displayName || m.id,
+              providerContextWindow: discoveredWindow,
+              storedContextWindow: storedModel?.contextWindow,
+              storedContextWindowSource: storedModel?.contextWindowSource,
+            })
+          : { contextWindow: discoveredWindow, source: discoveredWindow ? "provider" as const : undefined };
+        const contextWindow = metadata.contextWindow;
  const normalizedModel = {
           id: m.id,
           displayName: m.displayName || m.id,
@@ -133,6 +142,8 @@ export async function GET(req: Request) {
           id: m.id,
           displayName: m.displayName || m.id,
           ...(contextWindow ? { contextWindow } : {}),
+          ...(metadata.source ? { contextWindowSource: metadata.source } : {}),
+          ...(metadata.maxOutputTokens ? { maxOutputTokens: metadata.maxOutputTokens } : {}),
           providerId: "cursor",
           providerName: "Cursor",
           source: "cursor",
@@ -150,12 +161,27 @@ export async function GET(req: Request) {
             const discoveredWindow = providerContextWindow(m);
             const defaultVariant = m.variants?.find((variant) => variant.isDefault) ?? m.variants?.[0];
             const variantParams = (defaultVariant?.params ?? []).map((param) => ({ id: param.id, value: param.value }));
-            const effectiveWindow = discoveredWindow;
+            const stored = storedById.get(m.id);
+            const metadata = resolveModelContextMetadata({
+              connection: cursorConnection,
+              modelId: m.id,
+              displayName: m.displayName || m.id,
+              providerContextWindow: discoveredWindow,
+              storedContextWindow: stored?.contextWindow,
+              storedContextWindowSource: stored?.contextWindowSource,
+            });
  return {
               id: m.id,
               displayName: m.displayName || m.id,
               description: m.description,
-              ...(effectiveWindow ? { contextWindow: effectiveWindow, contextWindowDiscovered: Boolean(discoveredWindow) } : {}),
+              ...(metadata.contextWindow ? { contextWindow: metadata.contextWindow, contextWindowDiscovered: Boolean(discoveredWindow), contextWindowSource: metadata.source } : {}),
+              ...(metadata.maxOutputTokens ? { maxOutputTokens: metadata.maxOutputTokens } : {}),
+              parameters: (m.parameters ?? []).map((p) => ({
+                id: p.id,
+                displayName: p.displayName,
+                values: p.values.map((v) => ({ value: v.value, displayName: v.displayName })),
+              })),
+              defaultParams: variantParams,
             };
           }),
         );
@@ -201,6 +227,7 @@ export async function GET(req: Request) {
         const normalizedModel = {
           id: model.id,
           displayName: model.displayName,
+          providerId: model.providerKey,
           contextWindow,
           capabilities: model.capabilities as Record<string, boolean> | undefined,
           parameters: baseParameters,
@@ -222,6 +249,8 @@ export async function GET(req: Request) {
           source: model.source,
           tags: "tags" in model && Array.isArray(model.tags) ? model.tags : undefined,
           ...(contextWindow ? { contextWindow } : {}),
+          ...(model.contextWindowSource ? { contextWindowSource: model.contextWindowSource } : {}),
+          ...(model.maxOutputTokens ? { maxOutputTokens: model.maxOutputTokens } : {}),
           capabilities: model.capabilities as Record<string, boolean> | undefined,
           ...(parameters.length ? { parameters } : {}),
           defaultParams,

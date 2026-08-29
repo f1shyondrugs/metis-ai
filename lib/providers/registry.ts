@@ -71,6 +71,15 @@ const PORTABLE_REASONING_PARAMETER = {
   ],
 } as const;
 
+
+const CLAUDE_CONTEXT_PARAMETER = {
+  id: "contextWindow",
+  displayName: "Context",
+  values: [
+    { value: "200k", displayName: "200K" },
+    { value: "1m", displayName: "1M" },
+  ],
+} as const;
 const ANTHROPIC_REASONING_PARAMETER = {
   id: "effort",
   displayName: "Reasoning",
@@ -242,11 +251,20 @@ export const PROVIDERS: ProviderDefinition[] = [
     kind: "claude-agent",
     authTypes: ["oauth"],
     capabilities: agentCapabilities,
-    models: models({
-      id: "claude-sonnet-4-6",
-      displayName: "Claude Sonnet Agent",
-      tags: ["coding", "agent"],
-    }),
+    // Mirrors T3 Code's Claude model/context semantics: only models that
+    // actually expose a 200K/1M switch get a context option. 4.7/4.8 are
+    // already 1M at the API and therefore expose metadata, not a fake toggle.
+    models: models(
+      { id: "claude-fable-5", displayName: "Claude Fable 5", tags: ["reasoning", "coding", "agent"], contextWindow: 1_000_000, contextWindowSource: "catalog", parameters: [CLAUDE_CONTEXT_PARAMETER], defaultParams: [{ id: "contextWindow", value: "1m" }] },
+      { id: "claude-opus-5", displayName: "Claude Opus 5", tags: ["reasoning", "agent"], contextWindow: 1_000_000, contextWindowSource: "catalog", parameters: [CLAUDE_CONTEXT_PARAMETER], defaultParams: [{ id: "contextWindow", value: "1m" }] },
+      { id: "claude-opus-4-8", displayName: "Claude Opus 4.8", tags: ["reasoning", "agent"], contextWindow: 1_000_000, contextWindowSource: "catalog" },
+      { id: "claude-opus-4-7", displayName: "Claude Opus 4.7", tags: ["reasoning", "agent"], contextWindow: 1_000_000, contextWindowSource: "catalog" },
+      { id: "claude-opus-4-6", displayName: "Claude Opus 4.6", tags: ["reasoning", "agent"], contextWindow: 1_000_000, contextWindowSource: "catalog", parameters: [CLAUDE_CONTEXT_PARAMETER], defaultParams: [{ id: "contextWindow", value: "1m" }] },
+      { id: "claude-opus-4-5", displayName: "Claude Opus 4.5", tags: ["reasoning", "agent"], contextWindow: 200_000, contextWindowSource: "catalog" },
+      { id: "claude-sonnet-5", displayName: "Claude Sonnet 5", tags: ["reasoning", "coding", "agent"], contextWindow: 1_000_000, contextWindowSource: "catalog", parameters: [CLAUDE_CONTEXT_PARAMETER], defaultParams: [{ id: "contextWindow", value: "200k" }] },
+      { id: "claude-sonnet-4-6", displayName: "Claude Sonnet 4.6", tags: ["coding", "agent"], contextWindow: 1_000_000, contextWindowSource: "catalog", parameters: [CLAUDE_CONTEXT_PARAMETER], defaultParams: [{ id: "contextWindow", value: "200k" }] },
+      { id: "claude-haiku-4-5", displayName: "Claude Haiku 4.5", tags: ["fast", "agent"], contextWindow: 200_000, contextWindowSource: "catalog" },
+    ),
     setupHint: "Use OAuth to connect your Claude Code account.",
   },
   {

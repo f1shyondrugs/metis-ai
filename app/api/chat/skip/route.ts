@@ -1,5 +1,6 @@
 import { getAuthenticatedUserId, isAuthenticated } from "@/lib/auth";
 import { appendRunEvent, requestJobCancel, updateJob } from "@/lib/db-jobs";
+import { resolveApproval } from "@/lib/db-approvals";
 import { cancelQuestion } from "@/lib/db-questions";
 import { getChat, updateChat } from "@/lib/db-store";
 
@@ -14,6 +15,17 @@ export async function POST(req: Request) {
   if (!chatId) return Response.json({ error: "chatId is required" }, { status: 400 });
   const userId = (await getAuthenticatedUserId(req)) ?? undefined;
   const chat = getChat(chatId, userId);
+  if (chat?.pendingApproval?.id) {
+    const denied = resolveApproval(chat.pendingApproval.id, "deny", userId);
+    if (denied) {
+      updateChat(chatId, { runStatus: "cancelled", pendingApproval: null, badge: null }, userId);
+      if (denied.jobId) {
+        updateJob(denied.jobId, { status: "cancelled", error: "Approval denied by user." });
+        appendRunEvent(denied.jobId, chatId, userId, "status", { status: "cancelled", approvalId: chat.pendingApproval.id });
+      }
+      return Response.json({ ok: true, status: "cancelled" });
+    }
+  }
   if (chat?.pendingQuestion?.questionId) {
     const cancelled = cancelQuestion(chat.pendingQuestion.questionId, userId);
     if (cancelled) {

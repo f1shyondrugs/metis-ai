@@ -106,7 +106,7 @@ export function SubagentChatView({ tool, onBack, onCancel, cancelling = false, s
       style={{ "--subagent-sidebar-width": `${sidebarWidth}px` } as CSSProperties}
       aria-label="Subagent chat"
     >
-      <header className="flex h-12 shrink-0 items-center gap-2 border-b border-border/30 bg-background/90 px-3 backdrop-blur-xl md:px-4">
+      <header className="flex h-12 shrink-0 items-center gap-2 border-b border-border/55 bg-background px-3 md:px-4">
         <Button type="button" variant="ghost" size="icon" className="size-8" onClick={onBack} aria-label="Back to chat" title="Back to chat">
           <ArrowLeft className="size-4" />
         </Button>
@@ -127,7 +127,7 @@ export function SubagentChatView({ tool, onBack, onCancel, cancelling = false, s
         <div className="mx-auto w-full max-w-2xl space-y-6 px-4 pt-6 sm:px-6" style={{ paddingBottom: 144 }}>
           {prompt ? (
             <div className="flex flex-col items-end gap-1">
-              <div className="max-w-[85%] space-y-2 rounded-3xl bg-secondary/80 px-4 py-2.5 text-[15px] leading-relaxed">
+              <div className="max-w-[85%] space-y-2 rounded-xl bg-secondary/70 px-4 py-2.5 text-[15px] leading-relaxed">
                 <p className="whitespace-pre-wrap break-words">{prompt}</p>
               </div>
             </div>
@@ -167,7 +167,7 @@ export function SubagentChatView({ tool, onBack, onCancel, cancelling = false, s
                     <Markdown content={block.text} />
                   </div>
                 ) : (
-                  <div className="max-w-[85%] space-y-2 rounded-3xl bg-secondary/80 px-4 py-2.5 text-[15px] leading-relaxed">
+                  <div className="max-w-[85%] space-y-2 rounded-xl bg-secondary/70 px-4 py-2.5 text-[15px] leading-relaxed">
                     <p className="whitespace-pre-wrap break-words">{block.text}</p>
                   </div>
                 )}
@@ -182,8 +182,8 @@ export function SubagentChatView({ tool, onBack, onCancel, cancelling = false, s
       <div className="pointer-events-none absolute inset-x-0 bottom-0 z-20">
         <div className="pointer-events-none pb-4 pt-3">
           <div className="pointer-events-auto relative mx-auto w-full max-w-2xl px-4 sm:px-6">
-            <div className="relative flex w-full items-center gap-2 rounded-3xl border border-border/50 bg-card/80 p-2 text-sm text-muted-foreground shadow-[0_8px_40px_-12px_rgba(0,0,0,0.4)] backdrop-blur-xl">
-              <div className="flex min-h-10 min-w-0 flex-1 items-center gap-3 rounded-2xl px-3 py-2">
+            <div className="relative flex w-full items-center gap-2 rounded-xl border border-border/65 bg-card p-2 text-sm text-muted-foreground shadow-[0_1px_2px_rgba(0,0,0,0.16)]">
+              <div className="flex min-h-10 min-w-0 flex-1 items-center gap-3 rounded-lg px-3 py-2">
                 <Clock3 className="size-4 shrink-0" />
                 <span className="truncate">This subagent chat is read-only.</span>
               </div>

@@ -11,6 +11,7 @@ User=YOUR_USER
 Group=YOUR_GROUP
 WorkingDirectory=YOUR_INSTALL_DIR
 EnvironmentFile=YOUR_INSTALL_DIR/.env
+EnvironmentFile=-YOUR_INSTALL_DIR/.deploy.env
 Environment=HOME=YOUR_HOME
 Environment=NODE_ENV=production
 Environment=NODE_OPTIONS=--max-old-space-size=4096

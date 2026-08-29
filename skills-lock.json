@@ -7,11 +7,35 @@
       "skillPath": "skills/use-ai-sdk/SKILL.md",
       "computedHash": "da25c27a274ef2b71017c255f95a26350d2519765a75cb54ee1a37872b121dab"
     },
+    "build-discipline": {
+      "source": "./manual",
+      "sourceType": "local",
+      "skillPath": "skills/manual/build-discipline/SKILL.md",
+      "computedHash": "03b7a3053fcfeedf1e81e0ac3587ceed82709dd4425790f70ae1212704c32edd"
+    },
+    "design-system": {
+      "source": "nextlevelbuilder/ui-ux-pro-max-skill",
+      "sourceType": "github",
+      "skillPath": ".claude/skills/design-system/SKILL.md",
+      "computedHash": "a05715299135276628f53519484e1267ec8ad111e6355a09c2da1cf66aee2cc3"
+    },
+    "design-taste-frontend": {
+      "source": "leonxlnx/taste-skill",
+      "sourceType": "github",
+      "skillPath": "skills/taste-skill/SKILL.md",
+      "computedHash": "6d838b246d0e35d0b53f4f23f98ba7a1dd561937e64f7d0c7553b0928e376c3e"
+    },
     "find-skills": {
       "source": "vercel-labs/skills",
       "sourceType": "github",
       "skillPath": "skills/find-skills/SKILL.md",
       "computedHash": "b146008599c31057cef1c145774cea5d5afb30e8f43fa802e47a4b461419aaaf"
+    },
+    "frontend-design": {
+      "source": "anthropics/skills",
+      "sourceType": "github",
+      "skillPath": "skills/frontend-design/SKILL.md",
+      "computedHash": "4eabc66183767153e404b39d1b839b1c37f2d82d86f0a0d7e880a579d8d62336"
     },
     "playwright": {
       "source": "bobmatnyc/claude-mpm-skills",
@@ -19,11 +43,23 @@
       "skillPath": "toolchains/javascript/testing/playwright/SKILL.md",
       "computedHash": "003fc7f5ee2ba795786f4f5689900be32fcdf53a834777512091ac1192274c07"
     },
-    "build-discipline": {
+    "web-design-guidelines": {
+      "source": "vercel-labs/agent-skills",
+      "sourceType": "github",
+      "skillPath": "skills/web-design-guidelines/SKILL.md",
+      "computedHash": "f3bc47f890f42a44db1007ab390709ec368e4b8c089baee6b0007182236ac474"
+    },
+    "web-design-reviewer": {
+      "source": "github/awesome-copilot",
+      "sourceType": "github",
+      "skillPath": "skills/web-design-reviewer/SKILL.md",
+      "computedHash": "4a05e32553a1dc916ee4f68f709d478c17de6b8ce184932f56f2b8646f3d4986"
+    },
+    "metis-design-director": {
       "source": "manual",
       "sourceType": "local",
-      "skillPath": "skills/manual/build-discipline/SKILL.md",
-      "computedHash": "03b7a3053fcfeedf1e81e0ac3587ceed82709dd4425790f70ae1212704c32edd"
+      "skillPath": "skills/manual/metis-design-director/SKILL.md",
+      "computedHash": "c3bddcfde555ad0b656efd609aef874a90bdbf053103b52561de1b3a6334806f"
     }
   }
 }

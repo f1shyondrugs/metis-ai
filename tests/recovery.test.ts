@@ -253,6 +253,32 @@ test("stale job writers are rejected by the durable revision check", () => {
   assert.equal(getJob(job.id)?.error, "newer state");
 });
 
+test("same model and params clear a stale pending model switch", () => {
+  const { createChat } = modules[0];
+  const { claimNextJob, enqueueJob, getJob, requestJobModelSwitch, updateJob } = modules[1];
+  const chat = createChat("Same model switch");
+  const modelId = "antigravity:model-a";
+  const params = [{ id: "effort", value: "medium" }];
+  const job = enqueueJob({ chatId: chat.id, message: "run", modelId, modelParams: params });
+  let claimed = claimNextJob();
+  while (claimed && claimed.id !== job.id) {
+    updateJob(claimed.id, { status: "completed" });
+    claimed = claimNextJob();
+  }
+  assert.equal(claimed?.id, job.id);
+  assert.ok(updateJob(job.id, {
+    pendingModelId: modelId,
+    pendingModelParams: params,
+    modelSwitchRequestedAt: new Date().toISOString(),
+  }));
+  const resolved = requestJobModelSwitch(chat.id, undefined, modelId, params);
+  assert.equal(resolved?.pendingModelId, undefined);
+  assert.equal(resolved?.pendingModelParams, undefined);
+  assert.equal(resolved?.modelSwitchRequestedAt, undefined);
+  assert.equal(getJob(job.id)?.status, "running");
+  updateJob(job.id, { status: "completed" });
+});
+
 test("worker leases fence stale processes, events, and expired claims", async () => {
   const { createChat } = modules[0];
   const { appendRunEvent, enqueueJob, claimNextJob, getJob, reapExpiredJobLeases, touchJob, updateJob } = modules[1];

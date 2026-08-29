@@ -30,6 +30,9 @@ import {
   Copy,
   ChevronDown,
   ChevronRight,
+  ShieldAlert,
+  FilePen,
+  Unlock,
   CircleAlert,
   Brain,
   Bot,
@@ -97,6 +100,7 @@ import { BrowserSettingsControls } from "@/components/browser-settings-controls"
 import { CommandPalette } from "@/components/command-palette";
 import type { MemoryItem } from "@/components/memories-panel";
 import type { ChatLogEntry, ChatLogCategory } from "@/lib/chat-logs";
+import { ApprovalPanel, type ApprovalDecisionValue, type PendingApprovalView } from "@/components/approval-panel";
 import { ProviderLogo } from "@/components/provider-logo";
 import { ModelOptionsMenu } from "@/components/model-options-menu";
 import {
@@ -166,18 +170,18 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { Input } from "@/components/ui/input";
-import {
-  Sheet,
-  SheetContent,
-  SheetHeader,
-  SheetTitle,
-} from "@/components/ui/sheet";
 import { Textarea } from "@/components/ui/textarea";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
 import { modelAttrSummary } from "@/lib/model-label";
 import { clientConfig } from "@/lib/client-config";
+import {
+  DEFAULT_RUNTIME_MODE,
+  RUNTIME_MODES,
+  normalizeRuntimeMode,
+  type RuntimeMode,
+} from "@/lib/runtime-mode";
 import { modelKey, parseModelKey } from "@/lib/providers/types";
 import type { AgentMode } from "@/lib/store";
 import {
@@ -197,8 +201,17 @@ type RunMetadata = {
   connectionId?: string;
   outputTokens?: number;
   inputTokens?: number;
+  cachedInputTokens?: number;
+  cacheWriteInputTokens?: number;
   inputTokensEstimated?: boolean;
   totalTokens?: number;
+  totalProcessedTokens?: number;
+  contextUsedTokens?: number;
+  contextWindow?: number;
+  contextWindowSource?: "provider" | "runtime" | "stored-provider" | "registry" | "catalog" | "inferred" | "estimate";
+  maxOutputTokens?: number;
+  compactsAutomatically?: boolean;
+  autoCompactThreshold?: number;
   costUsd?: number;
   completedAt: string;
 };
@@ -274,7 +287,6 @@ type ToolPart = {
   status: string;
   detail?: string;
   kind?: "plan" | "edit" | "read" | "shell" | "subagent" | "mcp" | "canvas" | "note" | "todo" | "browser" | "memory" | "automation" | "compaction" | "other";
-  source?: "mcp" | "native" | "browser";
   path?: string;
   diff?: { before?: string; after?: string; additions?: number; deletions?: number };
   todos?: Array<{ id?: string; content: string; status?: string }>;
@@ -458,6 +470,12 @@ function truncateFileName(name: string, max = 22): string {
   return `${name.slice(0, max - 1)}…`;
 }
 
+function isLegacyCodexNoiseTool(tool: Pick<ToolPart, "name" | "input" | "result" | "detail" | "todos">) {
+  const name = tool.name.trim().toLowerCase();
+  const emptyPayload = !tool.input && !tool.result && !tool.detail && !tool.todos?.length;
+  return emptyPayload && (name === "codex error" || name === "codex todo list");
+}
+
 function partsFromFlat(m: {
   content: string;
   thinking?: string;
@@ -476,6 +494,7 @@ function partsFromFlat(m: {
   }
   const toolsById = new Map<string, ToolPart>();
   for (const t of m.tools ?? []) {
+    if (isLegacyCodexNoiseTool(t)) continue;
     const previous = toolsById.get(t.id);
     toolsById.set(t.id, previous ? { ...previous, ...t } : t);
   }
@@ -487,7 +506,6 @@ function partsFromFlat(m: {
       status: t.status,
       detail: t.detail,
       kind: t.kind,
-      source: t.source,
       path: t.path,
       diff: t.diff,
       input: t.input,
@@ -526,7 +544,6 @@ function flatFromParts(parts: MsgPart[]): {
         status: p.status,
         detail: p.detail,
         kind: p.kind,
-          source: p.source,
         path: p.path,
         diff: p.diff,
         input: p.input,
@@ -565,6 +582,7 @@ type ChatIndexEntry = {
   runUpdatedAt?: string;
   queueMessage?: string;
   pendingQuestion?: PendingQuestion;
+  pendingApproval?: PendingApprovalView;
   badge?: "blue" | "red";
   pinned?: boolean;
   archived?: boolean;
@@ -608,6 +626,8 @@ type Chat = ChatIndexEntry & {
   workspaces?: WorkspaceItem[];
   browserContext?: BrowserContext;
   sessionState?: ChatSessionState;
+  runtimeMode?: RuntimeMode;
+  pendingApproval?: PendingApprovalView;
 };
 
 type ChatPage = {
@@ -744,6 +764,17 @@ const CHAT_MESSAGE_PRELOAD_MAX = CHAT_MESSAGE_LOAD_LIMIT;
 const MODEL_STORAGE_KEY = `${clientConfig.storagePrefix}_model`;
 const PARAMS_STORAGE_KEY = `${clientConfig.storagePrefix}_model_params`;
 const MODE_STORAGE_KEY = `${clientConfig.storagePrefix}_mode`;
+const RUNTIME_MODE_STORAGE_KEY = "metis.runtimeMode";
+const RUNTIME_MODE_OPTIONS: Array<{ value: RuntimeMode; label: string }> = [
+  { value: "approval-required", label: "Approval required" },
+  { value: "auto-accept-edits", label: "Auto-accept edits" },
+  { value: "auto", label: "Auto" },
+  { value: "full-access", label: "Full access" },
+];
+function RuntimeModeIcon({ mode, className }: { mode: RuntimeMode; className?: string }) {
+  const Icon = mode === "approval-required" ? ShieldAlert : mode === "auto-accept-edits" ? FilePen : mode === "auto" ? Bot : Unlock;
+  return <Icon className={className} />;
+}
 const SIDEBAR_WIDTH_STORAGE_KEY = `${clientConfig.storagePrefix}_sidebar_width`;
 const SIDEBAR_MIN_WIDTH = 200;
 const SIDEBAR_MAX_WIDTH = 420;
@@ -1020,10 +1051,9 @@ function runMatchesModel(
 ) {
   if (typeof run.modelId !== "string" || !run.modelId) return false;
   if (run.providerId && run.providerId !== selection.providerKey) return false;
-  if (run.connectionId && selection.connectionId && run.connectionId !== selection.connectionId) return false;
+  if (run.connectionId && run.connectionId !== selection.connectionId) return false;
   const runModelId = parseModelKey(run.modelId).modelId;
-  const selectedModelId = parseModelKey(selection.modelId).modelId;
-  return runModelId === selectedModelId || run.modelId === selection.modelId;
+  return runModelId === selection.modelId || run.modelId === selection.modelId;
 }
 
 type ChatSnapshot = {
@@ -1038,9 +1068,11 @@ type ChatSnapshot = {
   workspaces: WorkspaceItem[];
   browserContext: BrowserContext;
   sessionState: ChatSessionState;
+  runtimeMode?: RuntimeMode;
   runStatus?: "idle" | "running" | "paused" | "waiting_for_user" | "waiting_input" | "completed" | "cancelled" | "failed" | "interrupted" | "error";
   queueMessage?: string;
   pendingQuestion?: PendingQuestion;
+  pendingApproval?: PendingApprovalView;
   messageOffset: number;
   hasEarlierMessages: boolean;
 };
@@ -1065,32 +1097,42 @@ type BrowserContext = {
 function BrowserAgentCursor({ kind }: { kind: string }) {
   return (
     <span className="metis-browser-agent-cursor-shape" data-kind={kind} aria-hidden="true">
-      <svg viewBox="0 0 18 24" role="presentation" focusable="false">
+      <svg viewBox="0 0 52 48" role="presentation" focusable="false">
         <defs>
-          <linearGradient id="metis-browser-cursor-fill" x1="3" y1="2" x2="14" y2="20" gradientUnits="userSpaceOnUse">
-            <stop offset="0" stopColor="#2a3640" />
-            <stop offset="1" stopColor="#0c1216" />
+          <linearGradient id="metis-browser-cursor-glass" x1="7" y1="4" x2="39" y2="42" gradientUnits="userSpaceOnUse">
+            <stop offset="0" stopColor="rgba(42,55,63,0.72)" />
+            <stop offset="0.44" stopColor="rgba(18,28,34,0.54)" />
+            <stop offset="1" stopColor="rgba(6,11,15,0.34)" />
           </linearGradient>
+          <linearGradient id="metis-browser-cursor-edge" x1="5" y1="3" x2="45" y2="40" gradientUnits="userSpaceOnUse">
+            <stop offset="0" stopColor="rgba(255,255,255,0.96)" />
+            <stop offset="0.34" stopColor="rgba(191,232,241,0.78)" />
+            <stop offset="0.7" stopColor="rgba(117,166,180,0.58)" />
+            <stop offset="1" stopColor="rgba(238,247,250,0.84)" />
+          </linearGradient>
+          <radialGradient id="metis-browser-cursor-glow" cx="0" cy="0" r="1" gradientTransform="translate(15 11) rotate(44) scale(27 18)" gradientUnits="userSpaceOnUse">
+            <stop stopColor="rgba(224,248,255,0.3)" />
+            <stop offset="1" stopColor="rgba(255,255,255,0)" />
+          </radialGradient>
         </defs>
         <path
-          d="M1.15 1.2 1.2 20.05 5.55 15.55 9.85 24.05 12.7 22.7 8.35 14.05 16.05 13.95Z"
-          fill="url(#metis-browser-cursor-fill)"
-          stroke="#f4fbff"
-          strokeWidth="1.35"
+          d="M7.1 4.15C4.05 3.4 1.72 6.15 2.8 9.08l13.35 33.55c1.04 2.78 4.82 3.08 6.28.48l7.35-17.38c1.1-2.57 3.2-4.55 5.83-5.51l12.78-4.7c3.46-1.27 3.46-6.17-.03-7.39L7.1 4.15Z"
+          fill="url(#metis-browser-cursor-glass)"
+          stroke="url(#metis-browser-cursor-edge)"
+          strokeWidth="1.3"
           strokeLinejoin="round"
-          strokeLinecap="round"
         />
         <path
-          d="M2.55 3.35 2.6 16.35 5.85 13.1"
+          d="M7.35 5.8 18.02 40.9c.43 1.46 2.43 1.61 3.08.24l6.98-15.08c1.28-2.76 3.59-4.91 6.43-5.99l12.18-4.6"
           fill="none"
-          stroke="rgba(210,242,252,0.55)"
+          stroke="rgba(238,252,255,0.42)"
           strokeWidth="0.9"
           strokeLinecap="round"
         />
+        <path d="M6.1 5.05 48.1 12.95 35.25 17.7 9.3 9.2Z" fill="url(#metis-browser-cursor-glow)" opacity=".82" />
       </svg>
       {kind === "click" ? <span className="metis-browser-agent-cursor-click" /> : null}
       {kind === "scroll" ? <span className="metis-browser-agent-cursor-scroll"><span /></span> : null}
-      {kind === "type" ? <span className="metis-browser-agent-cursor-caret" /> : null}
     </span>
   );
 }
@@ -1460,12 +1502,15 @@ function mapApiMessages(
       (m.id === latestAssistantId || /^⚠\s*/.test(m.content))
       ? m.content.replace(/^⚠\s*/, "").trim() || "Agent run failed."
       : "";
-    const toolsById = new Map((m.tools || []).map((tool) => [tool.id, tool]));
-    const persistedParts = (m.parts as MsgPart[] | undefined)?.map((part) => {
-      if (part.type !== "tool") return part;
-      const fullTool = toolsById.get(part.id);
-      return fullTool ? { ...fullTool, ...part, type: "tool" as const } : part;
-    });
+    const visibleTools = (m.tools || []).filter((tool) => !isLegacyCodexNoiseTool(tool));
+    const toolsById = new Map(visibleTools.map((tool) => [tool.id, tool]));
+    const persistedParts = (m.parts as MsgPart[] | undefined)
+      ?.map((part) => {
+        if (part.type !== "tool") return part;
+        const fullTool = toolsById.get(part.id);
+        return fullTool ? { ...fullTool, ...part, type: "tool" as const } : part;
+      })
+      .filter((part) => part.type !== "tool" || !isLegacyCodexNoiseTool(part));
     const base = {
       id: m.id,
       role: m.role,
@@ -1475,7 +1520,7 @@ function mapApiMessages(
       createdAt: m.createdAt,
       thinking: m.thinking,
       thinkingDone: Boolean(m.thinking),
-      tools: m.tools,
+      tools: visibleTools,
       parts: persistedParts,
       references: m.references,
       suggestions: normalizeSuggestions(m.suggestions),
@@ -1791,6 +1836,30 @@ export default function AppShell({ defaultCwd }: { defaultCwd: string }) {
   const [hasEarlierMessages, setHasEarlierMessages] = useState(false);
   const [loadingEarlierMessages, setLoadingEarlierMessages] = useState(false);
   const [chatTitle, setChatTitle] = useState("New chat");
+  const [greeting, setGreeting] = useState("Good afternoon");
+
+  useEffect(() => {
+    const updateGreeting = () => {
+      const hour = new Date().getHours();
+      let timeGreeting = "Good afternoon";
+      if (hour >= 5 && hour < 12) {
+        timeGreeting = "Good morning";
+      } else if (hour >= 18 || hour < 5) {
+        timeGreeting = "Good evening";
+      }
+
+      const cleanName = username?.trim();
+      const displayName = cleanName
+        ? cleanName.charAt(0).toUpperCase() + cleanName.slice(1)
+        : "";
+      setGreeting(displayName ? `${timeGreeting}, ${displayName}` : timeGreeting);
+    };
+
+    updateGreeting();
+    const timer = window.setInterval(updateGreeting, 60_000);
+    return () => window.clearInterval(timer);
+  }, [username]);
+
   const [incognito, setIncognito] = useState(false);
   const [activeChatIncognito, setActiveChatIncognito] = useState(false);
   const [loadingChatId, setLoadingChatId] = useState<string | null>(null);
@@ -1798,16 +1867,20 @@ export default function AppShell({ defaultCwd }: { defaultCwd: string }) {
   const [modelId, setModelId] = useState("");
   const [modes, setModes] = useState<AgentMode[]>([]);
   const [modeId, setModeId] = useState("agent");
+  const [runtimeMode, setRuntimeMode] = useState<RuntimeMode>(DEFAULT_RUNTIME_MODE);
   const [defaultModelId, setDefaultModelId] = useState("");
   const [defaultModelParams, setDefaultModelParams] = useState<ModelParamSelection[]>([]);
   const [modelParamsByModel, setModelParamsByModel] = useState<Record<string, ModelParamSelection[]>>({});
+  const [lastModelByProvider, setLastModelByProvider] = useState<Record<string, string>>({});
   const [models, setModels] = useState<ModelInfo[]>([]);
   const [configuredModelProviders, setConfiguredModelProviders] = useState<ConfiguredModelProvider[]>([]);
   const [modelsLoaded, setModelsLoaded] = useState(false);
   const [providerSetupOpen, setProviderSetupOpen] = useState(false);
   const [setupStatus, setSetupStatus] = useState<{ needed: boolean; hasUsers: boolean } | null>(null);
   const [modelSearch, setModelSearch] = useState("");
+  const [modelSearchOpen, setModelSearchOpen] = useState(false);
   const [modelMenuOpen, setModelMenuOpen] = useState(false);
+  const [mobileModelMenuOpen, setMobileModelMenuOpen] = useState(false);
   const [modelParams, setModelParams] = useState<ModelParamSelection[]>([]);
   const [customModelInputs, setCustomModelInputs] = useState<Record<string, string>>({});
   const [favoriteModelKeys, setFavoriteModelKeys] = useState<string[]>([]);
@@ -1842,6 +1915,17 @@ export default function AppShell({ defaultCwd }: { defaultCwd: string }) {
   ]);
   const [activeBrowserTabId, setActiveBrowserTabId] = useState("browser-1");
   const [browserLoading, setBrowserLoading] = useState(false);
+
+  useEffect(() => {
+    if (!modelId) return;
+    const providerId = parseModelKey(modelId).providerKey;
+    setLastModelByProvider((current) =>
+      current[providerId] === modelId
+        ? current
+        : { ...current, [providerId]: modelId },
+    );
+  }, [modelId]);
+
   const sendInFlightKeysRef = useRef<Set<string>>(new Set());
   const buildPlanInFlightRef = useRef(false);
   const creatingChatRef = useRef<Promise<string | null> | null>(null);
@@ -1954,6 +2038,9 @@ export default function AppShell({ defaultCwd }: { defaultCwd: string }) {
   const [referenceText, setReferenceText] = useState("");
   const [selectionAction, setSelectionAction] = useState<{ text: string; x: number; y: number } | null>(null);
   const [composerHeight, setComposerHeight] = useState(0);
+  const [composerFocused, setComposerFocused] = useState(false);
+  const [mobileKeyboardInset, setMobileKeyboardInset] = useState(0);
+  const mobileKeyboardBaselineRef = useRef(0);
   const [busy, setBusy] = useState(false);
   const setBusySynced = useCallback((value: boolean) => {
     busyRef.current = value;
@@ -1970,6 +2057,8 @@ export default function AppShell({ defaultCwd }: { defaultCwd: string }) {
   const [showScrollDown, setShowScrollDown] = useState(false);
   const [liveStatus, setLiveStatus] = useState("");
   const [pendingQuestion, setPendingQuestion] = useState<PendingQuestion | null>(null);
+  const [pendingApproval, setPendingApproval] = useState<PendingApprovalView | null>(null);
+  const [resolvingApproval, setResolvingApproval] = useState(false);
   const [recoveryStatus, setRecoveryStatus] = useState<"restored" | "needs_attention" | "not_available" | null>(null);
   const [recoveryJobId, setRecoveryJobId] = useState<string | null>(null);
   const [recoveryCanResume, setRecoveryCanResume] = useState(false);
@@ -2042,6 +2131,10 @@ export default function AppShell({ defaultCwd }: { defaultCwd: string }) {
     window.addEventListener("resize", onResize);
     return () => window.removeEventListener("resize", onResize);
   }, []);
+
+  useEffect(() => {
+    if (viewportWidth >= 768 && mobileNavOpen) setMobileNavOpen(false);
+  }, [mobileNavOpen, viewportWidth]);
 
   const layoutSidebarWidth =
     viewportWidth >= 768 && desktopSidebarOpen ? sidebarWidth : 0;
@@ -2757,6 +2850,12 @@ export default function AppShell({ defaultCwd }: { defaultCwd: string }) {
       .filter((part) => part.kind === "subagent"),
   );
   const runningSubagents = subagentOutputs.filter((tool) => isToolRunning(tool.status));
+  const latestAssistantMessage = [...messages].reverse().find((message) => message.role === "assistant");
+  const latestAssistantHasRunningTool = Boolean(
+    latestAssistantMessage &&
+      (latestAssistantMessage.parts ?? partsFromFlat(latestAssistantMessage))
+        .some((part) => part.type === "tool" && isToolRunning(part.status)),
+  );
   const chatBarSubagents = subagentOutputs.filter((tool) => {
     if (isToolRunning(tool.status)) return true;
     const status = String(tool.status || "").toLowerCase();
@@ -3361,12 +3460,12 @@ export default function AppShell({ defaultCwd }: { defaultCwd: string }) {
         seenChatUpdatedAtRef.current.set(chat.id, chat.updatedAt);
       }
       chatListInitializedRef.current = true;
-      const attentionChats = data.chats.filter((chat) => chat.pendingQuestion);
+      const attentionChats = data.chats.filter((chat) => chat.pendingQuestion || chat.pendingApproval);
       setAttentionChatIds((current) => [
         ...new Set([
           ...current.filter((id) => data.chats.some((chat) => chat.id === id)),
           ...attentionChats.map((chat) => chat.id),
-          ...data.chats.filter((chat) => chat.badge === "red").map((chat) => chat.id),
+          ...data.chats.filter((chat) => chat.badge === "red" || chat.pendingApproval).map((chat) => chat.id),
         ]),
       ]);
       for (const chat of attentionChats) {
@@ -3431,6 +3530,43 @@ export default function AppShell({ defaultCwd }: { defaultCwd: string }) {
     }
   }
 
+  async function selectRuntimeMode(nextRuntimeMode: RuntimeMode) {
+    if (!RUNTIME_MODES.includes(nextRuntimeMode)) return;
+    setRuntimeMode(nextRuntimeMode);
+    localStorage.setItem(RUNTIME_MODE_STORAGE_KEY, nextRuntimeMode);
+    if (!activeChatId) return;
+    const cached = chatCacheRef.current.get(activeChatId);
+    const response = await fetch(`/api/chats/${activeChatId}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        runtimeMode: nextRuntimeMode,
+        sessionState: { ...(cached?.sessionState || {}) },
+      }),
+    });
+    if (!response.ok) {
+      toast.error("Could not save runtime mode");
+      return;
+    }
+    chatCacheRef.current.set(activeChatId, {
+      ...(cached || {
+        id: activeChatId,
+        messages: [],
+        chatTitle,
+        modelId,
+        modelParams: [],
+        queuedMessages: [],
+        workspaces: [],
+        browserContext: normalizeBrowserContext(undefined, activeChatId),
+        sessionState: {},
+        messageOffset: 0,
+        hasEarlierMessages: false,
+      }),
+      runtimeMode: nextRuntimeMode,
+    });
+    await loadChats();
+  }
+
   const loadModels = useCallback(async () => {
     try {
       const res = await fetch("/api/models", { cache: "no-store" });
@@ -3488,6 +3624,7 @@ export default function AppShell({ defaultCwd }: { defaultCwd: string }) {
           modelId?: string;
           modelParams?: ModelParamSelection[];
           modelParamsByModel?: Record<string, ModelParamSelection[]>;
+          lastModelByProvider?: Record<string, string>;
           subagentModelEnabled?: boolean;
           subagentModelId?: string;
           draftInput?: string;
@@ -3526,6 +3663,21 @@ export default function AppShell({ defaultCwd }: { defaultCwd: string }) {
           setDefaultModelId(nextId);
           if (!activeChatIdRef.current) setModelId(nextId);
         }
+        const rememberedByProvider = Object.fromEntries(
+          Object.entries(settings.lastModelByProvider || {}).filter(([providerId, rememberedModelId]) => {
+            if (!providerId || !rememberedModelId) return false;
+            const parsed = parseModelKey(rememberedModelId);
+            return parsed.providerKey === providerId;
+          }),
+        );
+        if (nextId) {
+          const providerId = parseModelKey(nextId).providerKey;
+          rememberedByProvider[providerId] ||= nextId;
+        }
+        setLastModelByProvider((current) => ({
+          ...rememberedByProvider,
+          ...current,
+        }));
         const defaultParams = nextId && Object.prototype.hasOwnProperty.call(paramsByModel, nextId)
           ? paramsByModel[nextId] || []
           : settings.modelParams || [];
@@ -3786,6 +3938,10 @@ export default function AppShell({ defaultCwd }: { defaultCwd: string }) {
     const savedModeId = session.modeId || "agent";
     setModeId(savedModeId);
     if (typeof window !== "undefined") localStorage.setItem(MODE_STORAGE_KEY, savedModeId);
+    const savedRuntimeMode = normalizeRuntimeMode(snap.runtimeMode);
+    setRuntimeMode(savedRuntimeMode);
+    if (typeof window !== "undefined") localStorage.setItem(RUNTIME_MODE_STORAGE_KEY, savedRuntimeMode);
+    setPendingApproval(snap.pendingApproval ?? null);
     setModelParams(
       Object.prototype.hasOwnProperty.call(modelParamsByModel, snap.modelId)
         ? modelParamsByModel[snap.modelId] || []
@@ -3850,7 +4006,6 @@ export default function AppShell({ defaultCwd }: { defaultCwd: string }) {
     setQuestionAnswers(snap.pendingQuestion?.questions.map(() => "") ?? []);
     setQuestionCustom(snap.pendingQuestion?.questions.map(() => "") ?? []);
     setQuestionCustomActive(snap.pendingQuestion?.questions.map(() => false) ?? []);
-    setMobileNavOpen(false);
     setPaneKey((k) => k + 1);
   }, [acceptServerSnapshot, clearUnread, modelParamsByModel]);
 
@@ -3928,7 +4083,6 @@ export default function AppShell({ defaultCwd }: { defaultCwd: string }) {
       setActiveWorkspaceId(null);
       setWorkspaceOpen(false);
       setLiveStatus("");
-      setMobileNavOpen(false);
       setPaneKey((k) => k + 1);
     },
     [activeChatIncognito, navigateChat, persistActiveSnapshot],
@@ -3962,6 +4116,8 @@ export default function AppShell({ defaultCwd }: { defaultCwd: string }) {
         runStatus: data.chat.runStatus,
         queueMessage: data.chat.queueMessage,
         pendingQuestion: data.chat.pendingQuestion,
+        runtimeMode: normalizeRuntimeMode(data.chat.runtimeMode),
+        pendingApproval: data.chat.pendingApproval,
         messageOffset: data.messageOffset ?? 0,
         hasEarlierMessages: Boolean(data.hasEarlierMessages),
       };
@@ -3977,6 +4133,12 @@ export default function AppShell({ defaultCwd }: { defaultCwd: string }) {
 
   const loadChat = useCallback(
     async (id: string, opts?: { skipNav?: boolean; forceReload?: boolean }) => {
+      if (window.matchMedia("(max-width: 767px), (pointer: coarse)").matches) {
+        textareaRef.current?.blur();
+        setComposerFocused(false);
+        setMobileKeyboardInset(0);
+        mobileKeyboardBaselineRef.current = 0;
+      }
       setNotesOpen(false);
       setAutomationsOpen(false);
       setProjectHomeId(null);
@@ -4042,6 +4204,7 @@ export default function AppShell({ defaultCwd }: { defaultCwd: string }) {
       setLoadingEarlierMessages(false);
       pendingQuestionIdRef.current = null;
       setPendingQuestion(null);
+      setPendingApproval(null);
       setLiveStatus("");
       setActiveWorkspaceId(null);
       setWorkspaces([]);
@@ -4106,6 +4269,8 @@ export default function AppShell({ defaultCwd }: { defaultCwd: string }) {
               runStatus: data.chat.runStatus,
               queueMessage: data.chat.queueMessage,
               pendingQuestion: data.chat.pendingQuestion,
+        runtimeMode: normalizeRuntimeMode(data.chat.runtimeMode),
+        pendingApproval: data.chat.pendingApproval,
               messageOffset: cached.messageOffset,
               hasEarlierMessages: Boolean(data.hasEarlierMessages),
             };
@@ -4140,6 +4305,10 @@ export default function AppShell({ defaultCwd }: { defaultCwd: string }) {
             setBrowserInput(activeTab?.url || "");
             const session = next.sessionState || {};
             setModeId(session.modeId || "agent");
+            const serverRuntimeMode = normalizeRuntimeMode(next.runtimeMode);
+            setRuntimeMode(serverRuntimeMode);
+            localStorage.setItem(RUNTIME_MODE_STORAGE_KEY, serverRuntimeMode);
+            setPendingApproval(next.pendingApproval ?? null);
             setActiveWorkspaceId(
               session.activeWorkspaceId && next.workspaces.some((item) => item.id === session.activeWorkspaceId)
                 ? session.activeWorkspaceId
@@ -4174,7 +4343,7 @@ export default function AppShell({ defaultCwd }: { defaultCwd: string }) {
               next.runStatus === "running" ||
                 next.runStatus === "waiting_input" ||
                 next.runStatus === "waiting_for_user" ||
-                Boolean(next.pendingQuestion),
+                Boolean(next.pendingQuestion || next.pendingApproval),
             );
           } catch {
             /* ignore */
@@ -4220,6 +4389,8 @@ export default function AppShell({ defaultCwd }: { defaultCwd: string }) {
         runStatus: data.chat.runStatus,
         queueMessage: data.chat.queueMessage,
         pendingQuestion: data.chat.pendingQuestion,
+        runtimeMode: normalizeRuntimeMode(data.chat.runtimeMode),
+        pendingApproval: data.chat.pendingApproval,
         messageOffset: data.messageOffset ?? 0,
         hasEarlierMessages: Boolean(data.hasEarlierMessages),
       };
@@ -4368,6 +4539,9 @@ export default function AppShell({ defaultCwd }: { defaultCwd: string }) {
     if (!nextId) return;
     const nextParams = rememberedParamsForModel(nextId);
     const nextMap = { ...modelParamsByModel, [nextId]: nextParams };
+    const providerId = parseModelKey(nextId).providerKey;
+    const nextLastModelByProvider = { ...lastModelByProvider, [providerId]: nextId };
+    setLastModelByProvider(nextLastModelByProvider);
     setDefaultModelId(nextId);
     setDefaultModelParams(nextParams);
     persistModelParamsByModel(nextMap);
@@ -4380,7 +4554,11 @@ export default function AppShell({ defaultCwd }: { defaultCwd: string }) {
     void fetch("/api/preferences", {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ modelId: nextId, modelParams: nextParams }),
+      body: JSON.stringify({
+        modelId: nextId,
+        modelParams: nextParams,
+        lastModelByProvider: nextLastModelByProvider,
+      }),
     });
   }
 
@@ -4418,11 +4596,17 @@ export default function AppShell({ defaultCwd }: { defaultCwd: string }) {
       ? nextMap[nextId] || []
       : models.find((model) => model.id === nextId)?.defaultParams ?? [];
     nextMap[nextId] = nextParams;
+    const providerId = parseModelKey(nextId).providerKey;
+    const nextLastModelByProvider = { ...lastModelByProvider, [providerId]: nextId };
     setModelParamsByModel(nextMap);
+    setLastModelByProvider(nextLastModelByProvider);
     void fetch("/api/preferences", {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ modelParamsByModel: nextMap }),
+      body: JSON.stringify({
+        modelParamsByModel: nextMap,
+        lastModelByProvider: nextLastModelByProvider,
+      }),
     });
     setModelId(nextId);
     localStorage.setItem(MODEL_STORAGE_KEY, nextId);
@@ -4481,7 +4665,6 @@ export default function AppShell({ defaultCwd }: { defaultCwd: string }) {
       setAutomationsOpen(true);
       setNotesOpen(false);
       setWorkspaceOpen(false);
-      setMobileNavOpen(false);
       persistActiveSnapshot();
         setActiveChatId(null);
         activeChatIdRef.current = null;
@@ -4490,7 +4673,6 @@ export default function AppShell({ defaultCwd }: { defaultCwd: string }) {
       setNotesOpen(true);
       setAutomationsOpen(false);
       setWorkspaceOpen(false);
-      setMobileNavOpen(false);
     } else if (routeChatId) {
       setNotesOpen(false);
       setAutomationsOpen(false);
@@ -4525,6 +4707,9 @@ export default function AppShell({ defaultCwd }: { defaultCwd: string }) {
         const serverModeId = data.chat.sessionState?.modeId || "agent";
         setModeId(serverModeId);
         if (typeof window !== "undefined") localStorage.setItem(MODE_STORAGE_KEY, serverModeId);
+        const serverRuntimeMode = normalizeRuntimeMode(data.chat.runtimeMode);
+        setRuntimeMode(serverRuntimeMode);
+        localStorage.setItem(RUNTIME_MODE_STORAGE_KEY, serverRuntimeMode);
         setModelParams(
           data.chat.modelId && Object.prototype.hasOwnProperty.call(modelParamsByModel, data.chat.modelId)
             ? modelParamsByModel[data.chat.modelId] || []
@@ -4540,9 +4725,10 @@ export default function AppShell({ defaultCwd }: { defaultCwd: string }) {
         const waitingForInput =
           data.chat.runStatus === "waiting_input" ||
           data.chat.runStatus === "waiting_for_user" ||
-          Boolean(data.chat.pendingQuestion);
+          Boolean(data.chat.pendingQuestion || data.chat.pendingApproval);
         pendingQuestionIdRef.current = data.chat.pendingQuestion?.questionId ?? null;
         setPendingQuestion(data.chat.pendingQuestion ?? null);
+        setPendingApproval(data.chat.pendingApproval ?? null);
         if (
           data.chat.pendingQuestion &&
           data.chat.pendingQuestion.questionId !== pendingQuestion?.questionId
@@ -4831,17 +5017,56 @@ export default function AppShell({ defaultCwd }: { defaultCwd: string }) {
 
   useEffect(() => {
     if (!authed) return;
+    const mobileInteraction = window.matchMedia("(max-width: 767px), (pointer: coarse)").matches;
+    if (mobileInteraction) return;
     const timer = window.setTimeout(() => {
-      textareaRef.current?.focus();
+      textareaRef.current?.focus({ preventScroll: true });
     }, 0);
     return () => window.clearTimeout(timer);
   }, [authed, activeChatId, paneKey]);
 
   useEffect(() => {
-    if (!modelMenuOpen) return;
-    const timer = window.setTimeout(() => modelSearchRef.current?.focus(), 0);
+    const viewport = window.visualViewport;
+    if (!viewport) return;
+
+    const updateKeyboardInset = () => {
+      if (!composerFocused || !window.matchMedia("(max-width: 767px), (pointer: coarse)").matches) {
+        setMobileKeyboardInset(0);
+        return;
+      }
+      const visibleBottom = viewport.height + viewport.offsetTop;
+      const currentLayoutHeight = Math.max(window.innerHeight, document.documentElement.clientHeight);
+      if (mobileKeyboardBaselineRef.current <= 0) {
+        mobileKeyboardBaselineRef.current = Math.max(currentLayoutHeight, visibleBottom);
+      }
+      const visualShrink = Math.max(0, mobileKeyboardBaselineRef.current - visibleBottom);
+      const layoutShrink = Math.max(0, mobileKeyboardBaselineRef.current - currentLayoutHeight);
+      const obscured = Math.max(0, visualShrink - layoutShrink);
+      setMobileKeyboardInset(obscured > 80 ? Math.round(obscured) : 0);
+    };
+
+    updateKeyboardInset();
+    viewport.addEventListener("resize", updateKeyboardInset);
+    viewport.addEventListener("scroll", updateKeyboardInset);
+    window.addEventListener("resize", updateKeyboardInset);
+    return () => {
+      viewport.removeEventListener("resize", updateKeyboardInset);
+      viewport.removeEventListener("scroll", updateKeyboardInset);
+      window.removeEventListener("resize", updateKeyboardInset);
+    };
+  }, [composerFocused]);
+
+  useEffect(() => {
+    if (!modelMenuOpen && !mobileModelMenuOpen) return;
+    const timer = window.setTimeout(() => {
+      if (modelSearchOpen) modelSearchRef.current?.focus();
+      const activeModel = document.querySelector<HTMLElement>(
+        '[data-model-menu="selector"] [data-model-selected="true"]',
+      );
+      activeModel?.scrollIntoView({ block: "nearest" });
+    }, 0);
     return () => window.clearTimeout(timer);
-  }, [modelMenuOpen]);
+  }, [mobileModelMenuOpen, modelMenuOpen, modelProviderFilter, modelSearchOpen]);
 
   // Keep in-memory chat cache warm so switches stay instant
   useEffect(() => {
@@ -4875,6 +5100,8 @@ export default function AppShell({ defaultCwd }: { defaultCwd: string }) {
         },
         activeChatId,
       ),
+      runtimeMode,
+      pendingApproval: pendingApproval ?? undefined,
       sessionState: {
         terminalCwd: remoteTerminalCwd,
         fileCwd: remoteFileCwd,
@@ -4916,8 +5143,10 @@ export default function AppShell({ defaultCwd }: { defaultCwd: string }) {
     workspaceOpen,
     workspaceWidth,
     modeId,
+    runtimeMode,
     busy,
     pendingQuestion,
+    pendingApproval,
     messageOffset,
     hasEarlierMessages,
   ]);
@@ -5560,15 +5789,7 @@ export default function AppShell({ defaultCwd }: { defaultCwd: string }) {
   }
 
   function startEditing(message: Msg) {
-    if (
-      busy ||
-      reverting ||
-      !activeChatId ||
-      message.id.startsWith("u-") ||
-      message.id.startsWith("a-")
-    ) {
-      return;
-    }
+    if (busy || reverting || !activeChatId || message.role !== "user") return;
     setEditingMessageId(message.id);
     setEditValue(message.content);
   }
@@ -5758,6 +5979,27 @@ export default function AppShell({ defaultCwd }: { defaultCwd: string }) {
       toast.error(error instanceof Error ? error.message : "Answer failed");
     } finally {
       setAnsweringQuestion(false);
+    }
+  }
+
+  async function submitApprovalDecision(decision: ApprovalDecisionValue) {
+    if (!pendingApproval || resolvingApproval) return;
+    setResolvingApproval(true);
+    try {
+      const response = await fetch("/api/chat/approval", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ approvalId: pendingApproval.id, decision }),
+      });
+      const body = (await response.json().catch(() => ({}))) as { error?: string };
+      if (!response.ok) throw new Error(body.error || `HTTP ${response.status}`);
+      setPendingApproval(null);
+      if (activeChatIdRef.current) await loadChat(activeChatIdRef.current, { forceReload: true });
+      await loadChats();
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Approval failed");
+    } finally {
+      setResolvingApproval(false);
     }
   }
 
@@ -5993,8 +6235,25 @@ export default function AppShell({ defaultCwd }: { defaultCwd: string }) {
   }
 
   function toggleWorkspace() {
-    setActiveWorkspaceId((current) => current ?? workspaces[0]?.id ?? null);
-    setWorkspaceOpen((open) => !open);
+    if (workspaceOpen) {
+      setWorkspaceFullscreen(false);
+      setWorkspaceOpen(false);
+      return;
+    }
+    const selected = workspaces.find((item) => item.id === activeWorkspaceId) || workspaces[0];
+    if (selected) {
+      setActiveWorkspaceId(selected.id);
+      if (workspaceTab === "canvas" || workspaceTab === "plan") {
+        setWorkspaceTab(selected.type);
+      }
+    } else if (workspaceTab === "canvas" || workspaceTab === "plan") {
+      // An empty Canvas tab reads like a panel that never loaded. Open a real,
+      // immediately useful surface instead; generated canvases/plans still
+      // switch themselves into view as soon as they arrive.
+      setWorkspaceTab(browserEnabled ? "browser" : "files");
+    }
+    setWorkspaceMounted(true);
+    setWorkspaceOpen(true);
   }
 
   async function cancelSubagent() {
@@ -6634,10 +6893,6 @@ export default function AppShell({ defaultCwd }: { defaultCwd: string }) {
                 ? payload.kind as ToolPart["kind"]
                 : undefined)
               ?? classifyToolKind(name, input, result);
-        const source =
-          payload.source === "mcp" || payload.source === "native" || payload.source === "browser"
-            ? payload.source
-            : undefined;
             const attachmentPayload =
               payload.attachment && typeof payload.attachment === "object"
                 ? payload.attachment as Partial<MsgAttachment>
@@ -6700,7 +6955,6 @@ export default function AppShell({ defaultCwd }: { defaultCwd: string }) {
                   result: result ?? prevTool?.result,
                   subagent: subagent ?? prevTool?.subagent,
                   todos: todos ?? prevTool?.todos,
-          source: source ?? prevTool?.source,
                 };
                 if (idx >= 0) {
                   parts[idx] = prevTool ? { ...prevTool, ...next } : next;
@@ -7094,14 +7348,15 @@ export default function AppShell({ defaultCwd }: { defaultCwd: string }) {
         contextWindow: contextWindowForModel({ id: selectedKey.modelId || modelId, displayName }),
       } satisfies ModelInfo;
     })();
-  const measuredRuns = [...messages]
+  const latestUsage = [...messages]
     .reverse()
-    .filter((message) => message.role === "assistant" && typeof message.runMetadata?.inputTokens === "number")
-    .map((message) => message.runMetadata!);
-  const selectedRunUsage = measuredRuns.find((run) => runMatchesModel(run, selectedKey));
-  // A measurement from another model still describes this transcript, so it
-  // beats the raw estimate. Switching providers must not reset the reading.
-  const latestUsage = selectedRunUsage || measuredRuns[0];
+    .find((message) =>
+      message.role === "assistant" &&
+      (typeof message.runMetadata?.contextUsedTokens === "number" ||
+        typeof message.runMetadata?.inputTokens === "number") &&
+      runMatchesModel(message.runMetadata, selectedKey),
+    )
+    ?.runMetadata;
   // Keep the fallback's serialization/token ratio aligned with the runner.
   // The UI cannot reproduce provider instructions or runner compaction exactly,
   // but it can use the same shared estimator for the visible transcript shape.
@@ -7114,12 +7369,13 @@ export default function AppShell({ defaultCwd }: { defaultCwd: string }) {
       }),
     0,
   );
-  const contextUsed = latestUsage?.inputTokens ?? estimatedContextTokens;
+  const contextUsed = latestUsage?.contextUsedTokens ?? latestUsage?.inputTokens ?? estimatedContextTokens;
   const contextTotal = resolveContextTotal(
-    contextWindowForSelection(selectedModel, modelParams),
+    latestUsage?.contextWindow ?? contextWindowForSelection(selectedModel, modelParams),
     contextUsed,
   );
-  const contextEstimated = !selectedRunUsage || (selectedRunUsage.inputTokensEstimated ?? false);
+  const contextEstimated = latestUsage?.contextUsedTokens === undefined
+    && (latestUsage?.inputTokensEstimated ?? latestUsage?.inputTokens === undefined);
   const contextModelMaximum = contextWindowForModel(selectedModel);
   const contextSelection = contextSelectionLabel(selectedModel, modelParams);
   const contextCompacting = busy && contextTotal > 0 && contextPressure(contextUsed, contextTotal).compactRecommended;
@@ -7128,14 +7384,8 @@ export default function AppShell({ defaultCwd }: { defaultCwd: string }) {
     providerId: selectedModel.providerId,
     providerName: selectedModel.providerName,
     connectionLabel: selectedModel.connectionLabel,
-    connectionId: selectedKey.connectionId || selectedModel.connectionId,
     modelId: selectedKey.modelId || selectedModel.id,
   });
-  const usageSelectionKey = `${selectedModel.providerId || ""}|${selectedKey.connectionId || ""}|${selectedKey.modelId || ""}`;
-  useEffect(() => {
-    if (!authed) return;
-    void refreshPlanUsage(true);
-  }, [authed, usageSelectionKey, busy, refreshPlanUsage]);
   const selectedUsageProviderName =
     selectedModel.connectionLabel ||
     selectedModel.providerName ||
@@ -7215,6 +7465,7 @@ export default function AppShell({ defaultCwd }: { defaultCwd: string }) {
     void selectModel(nextId);
     setModelSearch("");
     setModelMenuOpen(false);
+    setMobileModelMenuOpen(false);
   }
 
   function renderModelOption(model: ModelInfo) {
@@ -7222,6 +7473,7 @@ export default function AppShell({ defaultCwd }: { defaultCwd: string }) {
     return (
       <DropdownMenuItem
         key={model.id}
+        data-model-selected={model.id === modelId ? "true" : "false"}
         onClick={() => {
           void selectModel(model.id);
           setModelSearch("");
@@ -7608,10 +7860,175 @@ export default function AppShell({ defaultCwd }: { defaultCwd: string }) {
     </div>
   ) : null;
 
+
+  function renderModelDropdownContent(align: "start" | "center" = "start") {
+    return (
+              <DropdownMenuContent
+                align={align}
+                collisionPadding={8}
+                data-model-menu="selector"
+                className="w-[calc(100vw-1rem)] max-w-[calc(100vw-1rem)] rounded-xl p-1.5 sm:w-72 sm:p-1"
+              >
+                <div className="p-1.5">
+                  {modelSearchOpen ? (
+                    <div className="flex items-center gap-1">
+                      <Input
+                        ref={modelSearchRef}
+                        value={modelSearch}
+                        onChange={(event) => setModelSearch(event.target.value)}
+                        placeholder="Search or provider:model…"
+                        aria-label="Search models"
+                        className="h-10 flex-1 text-sm sm:h-8 sm:text-xs"
+                        onKeyDown={(event) => event.stopPropagation()}
+                      />
+                      <Button
+                        type="button"
+                        size="icon-xs"
+                        variant="ghost"
+                        className="size-8 shrink-0"
+                        aria-label="Close model search"
+                        onClick={() => {
+                          setModelSearch("");
+                          setModelSearchOpen(false);
+                        }}
+                      >
+                        <X className="size-3.5" />
+                      </Button>
+                    </div>
+                  ) : (
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="ghost"
+                      className="h-8 w-full justify-start gap-2 px-2 text-xs font-normal text-muted-foreground"
+                      onClick={() => setModelSearchOpen(true)}
+                    >
+                      <Search className="size-3.5" />
+                      Search models
+                    </Button>
+                  )}
+                </div>
+                <div className="flex gap-1 overflow-x-auto border-b border-border/60 px-1 pb-1">
+                  {[
+                    { value: "all", label: "All" },
+                    ...availableProviders,
+                  ].map((provider) => (
+                    <button
+                      key={provider.value}
+                      type="button"
+                      className={cn(
+                        "inline-flex shrink-0 items-center gap-1 whitespace-nowrap rounded-full px-2.5 py-1 text-[11px] transition-colors",
+                        effectiveProviderFilter === provider.value
+                          ? "bg-muted text-foreground ring-1 ring-border/70"
+                          : "text-muted-foreground hover:bg-muted/70 hover:text-foreground",
+                      )}
+                      onClick={() => {
+                        setModelProviderFilter(provider.value);
+                        setModelSearch("");
+                        if (provider.value === "all") return;
+                        const rememberedModelId = lastModelByProvider[provider.value];
+                        if (
+                          rememberedModelId &&
+                          rememberedModelId !== modelId &&
+                          parseModelKey(rememberedModelId).providerKey === provider.value &&
+                          models.some((model) => model.id === rememberedModelId)
+                        ) {
+                          void selectModel(rememberedModelId);
+                        }
+                      }}
+                    >
+                      {provider.value === "all" ? null : <ProviderLogo providerId={provider.value} className="size-3" />}
+                      {provider.label}
+                    </button>
+                  ))}
+                </div>
+                <div className="max-h-[min(52dvh,24rem)] overflow-y-auto sm:max-h-60">
+                  {favoriteEntries.length ? (
+                    <div>
+                      <div className="flex items-center gap-1.5 px-2.5 pb-1 pt-2 text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
+                        <Pin className="size-3 fill-current text-primary" aria-hidden="true" />
+                        Pinned
+                      </div>
+                      {favoriteEntries.map(renderModelOption)}
+                    </div>
+                  ) : null}
+                  {[...groupedModels.entries()].map(([providerId, group]) => {
+                    const connectionId =
+                      group.models.find((model) => model.connectionId)?.connectionId ||
+                      availableProviders.find((provider) => provider.value === providerId)?.connectionId;
+                    const pinnedCustom = customPinnedEntries.find((model) => model.providerId === providerId);
+                    const customValue =
+                      customModelInputs[providerId] ||
+                      pinnedCustom?.displayName ||
+                      (selectedKey.providerKey === providerId && !models.some((model) => model.id === modelId)
+                        ? selectedKey.modelId
+                        : "");
+                    const customKey = customValue.trim()
+                      ? modelKey(providerId, customValue.trim(), connectionId)
+                      : "";
+                    const customPinned = customKey ? favoriteModelKeys.includes(customKey) : false;
+                    return (
+                      <div key={providerId}>
+                        <div className="flex items-center gap-1.5 px-2.5 pb-1 pt-2 text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
+                          <ProviderLogo providerId={providerId} className="size-3" />
+                          {group.label}
+                        </div>
+                        {group.models.map(renderModelOption)}
+                        <div className="py-1">
+                          <div className="flex items-center gap-1.5 rounded-md px-1.5 py-1">
+                            <Check className={cn("size-3.5 shrink-0", modelId === customKey ? "opacity-100" : "opacity-0")} />
+                            <ProviderLogo providerId={providerId} className="size-4" />
+                            <Input
+                              value={customValue}
+                              onChange={(event) =>
+                                setCustomModelInputs((current) => ({
+                                  ...current,
+                                  [providerId]: event.target.value,
+                                }))
+                              }
+                              onKeyDown={(event) => {
+                                event.stopPropagation();
+                                if (event.key === "Enter") {
+                                  event.preventDefault();
+                                  useCustomModel(providerId, connectionId);
+                                }
+                              }}
+                              placeholder="Custom model ID"
+                              aria-label={`Custom ${group.label} model ID`}
+                              className="h-7 min-w-0 flex-1 border-0 bg-transparent px-0 pl-1.5 text-xs shadow-none focus-visible:ring-0"
+                            />
+                            <button
+                              type="button"
+                              disabled={!customKey}
+                              className="shrink-0 rounded p-1 text-muted-foreground hover:text-foreground disabled:pointer-events-none disabled:opacity-40"
+                              aria-label={customPinned ? `Unpin custom ${group.label} model` : `Pin custom ${group.label} model`}
+                              onClick={(event) => {
+                                event.preventDefault();
+                                event.stopPropagation();
+                                if (customKey) toggleFavoriteModel(customKey);
+                              }}
+                            >
+                              <Pin className={cn("size-3", customPinned ? "fill-current text-primary" : "")} />
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })}
+                  {matchingModels.length === 0 && customPinnedEntries.length === 0 ? (
+                    <p className="px-2.5 py-3 text-xs text-muted-foreground">
+                      No models found.
+                    </p>
+                  ) : null}
+                </div>
+              </DropdownMenuContent>
+    );
+  }
+
   const composer = providerSetupRequired ? (
     <button
       type="button"
-      className="flex w-full items-center justify-between gap-4 rounded-3xl border border-dashed border-primary/40 bg-primary/[0.06] px-5 py-4 text-left shadow-[0_8px_40px_-12px_rgba(0,0,0,0.35)] transition-colors hover:border-primary/70 hover:bg-primary/10"
+      className="flex w-full items-center justify-between gap-4 rounded-xl border border-border/70 bg-card px-4 py-3 text-left transition-colors hover:bg-muted/35"
       onClick={() => setProviderSetupOpen(true)}
     >
       <span className="min-w-0">
@@ -7620,14 +8037,14 @@ export default function AppShell({ defaultCwd }: { defaultCwd: string }) {
           Choose a provider and connect an API key or OAuth account to start chatting.
         </span>
       </span>
-      <KeyRound className="size-5 shrink-0 text-primary" />
+      <KeyRound className="size-5 shrink-0 text-muted-foreground" />
     </button>
   ) : (
     <div className="w-full space-y-2">
       {queuedList}
       {referenceText ? (
-        <div className="flex items-center gap-2 rounded-xl border border-primary/20 bg-primary/[0.06] px-3 py-2 text-xs">
-          <Reply className="size-3.5 shrink-0 text-primary" />
+        <div className="flex items-center gap-2 rounded-lg border border-border/60 bg-muted/25 px-3 py-2 text-xs">
+          <Reply className="size-3.5 shrink-0 text-muted-foreground" />
           <span className="min-w-0 flex-1 truncate text-muted-foreground">
             Referenced to: <span className="text-foreground/80">{referenceText}</span>
           </span>
@@ -7662,26 +8079,27 @@ export default function AppShell({ defaultCwd }: { defaultCwd: string }) {
             <button
               key={`${reference.kind}-${reference.id}`}
               type="button"
-              className="inline-flex max-w-full items-center gap-1 rounded-full border border-border/60 bg-muted/30 px-2 py-1 text-xs text-muted-foreground hover:bg-muted/60 hover:text-foreground"
+              className="inline-flex max-w-full items-center gap-1 rounded-md border border-border/60 bg-muted/25 px-2 py-1 text-xs text-muted-foreground hover:bg-muted/55 hover:text-foreground"
               title={reference.detail || reference.label}
               onClick={() => removeReference(reference)}
             >
-              <span className="text-primary">@</span>
+              <span className="text-muted-foreground">@</span>
               <span className="max-w-48 truncate">{reference.label}</span>
               <X className="size-3" />
             </button>
           ))}
         </div>
       ) : null}
+      <div className="flex flex-col gap-1">
       <form
         onSubmit={(e) => void send(e)}
         onDragOver={onComposerDragOver}
         onDragLeave={onComposerDragLeave}
         onDrop={onComposerDrop}
         className={cn(
-          "relative flex w-full flex-col gap-2 rounded-3xl border border-border/50 bg-card/80 p-2 shadow-[0_8px_40px_-12px_rgba(0,0,0,0.4)] backdrop-blur-xl transition-colors",
+          "relative flex w-full flex-col gap-1.5 rounded-[1.25rem] bg-muted/20 p-1.5 ring-1 ring-inset ring-border/30 transition-[background-color,box-shadow] focus-within:bg-muted/25 focus-within:ring-border/45",
           !composerMultiline && "composer-single-line",
-          dragOver && "border-primary/60 bg-primary/5",
+          dragOver && "bg-muted/40 ring-foreground/30",
         )}
       >
         {referenceMenu ? (
@@ -7838,6 +8256,20 @@ export default function AppShell({ defaultCwd }: { defaultCwd: string }) {
             mentionLabels={references.map((reference) => reference.label)}
             onChange={handleComposerInputChange}
             onPaste={onComposerPaste}
+            onFocus={() => {
+              const viewport = window.visualViewport;
+              mobileKeyboardBaselineRef.current = Math.max(
+                window.innerHeight,
+                document.documentElement.clientHeight,
+                viewport ? viewport.height + viewport.offsetTop : 0,
+              );
+              setComposerFocused(true);
+            }}
+            onBlur={() => {
+              setComposerFocused(false);
+              setMobileKeyboardInset(0);
+              mobileKeyboardBaselineRef.current = 0;
+            }}
             onKeyDown={(e) => {
             if (referenceMenu && (e.key === "ArrowDown" || e.key === "ArrowUp")) {
               e.preventDefault();
@@ -7879,8 +8311,8 @@ export default function AppShell({ defaultCwd }: { defaultCwd: string }) {
               void send(e);
             }
             }}
-            placeholder="Message…"
-            className={cn(voiceRecording && voiceState === "recording" ? "opacity-0" : "dark:bg-transparent")}
+            placeholder="Message Metis…"
+            className={cn("max-sm:min-h-9 max-sm:px-3 max-sm:py-1.5 max-sm:text-[15px]", voiceRecording && voiceState === "recording" ? "opacity-0" : "dark:bg-transparent")}
             aria-label="Message"
           />
           {voiceRecording && voiceState === "recording" ? (
@@ -7909,7 +8341,7 @@ export default function AppShell({ defaultCwd }: { defaultCwd: string }) {
             variant="ghost"
             size="icon"
             aria-label={voiceRecording || voiceState === "permission" || voiceState === "uploading" || voiceState === "transcribing" ? "Cancel voice input" : "Attach files"}
-            className="size-9 shrink-0 self-end rounded-full"
+            className="size-11 shrink-0 self-end rounded-full sm:size-9"
             onClick={() => {
               if (voiceRecording || voiceState === "permission" || voiceState === "uploading" || voiceState === "transcribing") {
                 resetVoiceComposer();
@@ -7954,7 +8386,7 @@ export default function AppShell({ defaultCwd }: { defaultCwd: string }) {
             size="icon"
             disabled={voiceState === "permission" || voiceState === "uploading" || voiceState === "transcribing" ? true : !canSend && !busy && !voiceRecording}
             aria-label={voiceRecording ? "Stop recording" : voiceState === "permission" || voiceState === "uploading" || voiceState === "transcribing" ? "Transcribing voice input" : busy && !canSend ? "Stop agent" : busy ? "Queue message" : "Send"}
-            className="size-9 shrink-0 self-end rounded-full"
+            className="size-11 shrink-0 self-end rounded-full sm:size-9"
             onClick={
               voiceRecording
                 ? () => setVoiceStopSignal((current) => current + 1)
@@ -7973,24 +8405,31 @@ export default function AppShell({ defaultCwd }: { defaultCwd: string }) {
           </Button>
         </div>
       </form>
-      <div className="flex min-h-7 items-center px-1">
+      <div className="flex min-h-8 items-center px-1.5 md:min-h-7 md:px-1">
         {!modelsLoaded ? (
-          <div className="flex items-center gap-2 px-2.5 text-xs text-muted-foreground/70" role="status" aria-label="Loading models">
+          <div className="flex items-center gap-2 px-1.5 text-xs text-muted-foreground/70" role="status" aria-label="Loading models">
             <Skeleton className="h-6 w-24 rounded-full bg-muted/60" />
             <span>Loading models…</span>
           </div>
         ) : (
-          <div className="group/model flex flex-1 items-center gap-0.5">
+          <div className="group/model flex min-w-0 flex-1 items-center gap-0.5 overflow-hidden">
             {selectedMode ? (
               <DropdownMenu>
                 <DropdownMenuTrigger asChild>
-                  <Button type="button" variant="ghost" size="sm" className="h-7 max-w-32 gap-1.5 rounded-full px-2 text-xs font-normal hover:text-foreground" title={selectedMode.description}>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    aria-label={`Agent mode: ${selectedMode.name}`}
+                    className="hidden h-11 min-w-0 max-w-[11rem] shrink-0 items-center gap-1.5 rounded-md border-0 bg-transparent px-1.5 text-xs font-medium text-muted-foreground/75 hover:bg-muted/35 hover:text-foreground md:flex"
+                    title={`${selectedMode.name} — ${selectedMode.description}`}
+                  >
                     <ModeIcon mode={selectedMode} className="size-3.5 shrink-0" />
                     <span className="truncate">{selectedMode.name}</span>
-                    <ChevronDown className="size-3 shrink-0 opacity-60" />
+                    <ChevronDown className="size-3 shrink-0 opacity-55" />
                   </Button>
                 </DropdownMenuTrigger>
-                <DropdownMenuContent align="start" className="w-64">
+                <DropdownMenuContent align="start" collisionPadding={8} className="w-[min(15rem,calc(100vw-1rem))] rounded-xl">
                   <div className="px-2 py-1.5 text-[11px] text-muted-foreground">Agent mode</div>
                   {modes.map((mode) => (
                     <DropdownMenuItem key={mode.id} onClick={() => void selectMode(mode.id)}>
@@ -8005,172 +8444,134 @@ export default function AppShell({ defaultCwd }: { defaultCwd: string }) {
                 </DropdownMenuContent>
               </DropdownMenu>
             ) : null}
-            <DropdownMenu open={modelMenuOpen} onOpenChange={setModelMenuOpen}>
+            <DropdownMenu>
               <DropdownMenuTrigger asChild>
                 <Button
                   type="button"
                   variant="ghost"
                   size="sm"
-                  className="h-7 max-w-[min(100vw-8rem,28rem)] gap-1.5 rounded-full px-2.5 text-xs font-normal hover:text-foreground"
+                  aria-label={`Runtime permissions: ${RUNTIME_MODE_OPTIONS.find((option) => option.value === runtimeMode)?.label || "Full access"}`}
+                  className="hidden size-7 shrink-0 items-center justify-center rounded-md border-0 bg-transparent p-0 text-muted-foreground/65 hover:bg-muted/35 hover:text-foreground md:flex md:h-7 md:w-auto md:max-w-32 md:gap-1.5 md:px-1.5"
+                  title={`Runtime permissions: ${RUNTIME_MODE_OPTIONS.find((option) => option.value === runtimeMode)?.label || "Full access"}`}
+                >
+                  <RuntimeModeIcon mode={runtimeMode} className="size-3.5 shrink-0" />
+                  <span className="hidden truncate md:inline">
+                    {RUNTIME_MODE_OPTIONS.find((option) => option.value === runtimeMode)?.label || "Full access"}
+                  </span>
+                  <ChevronDown className="hidden size-3 shrink-0 opacity-60 md:block" />
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="start" collisionPadding={8} className="w-[min(15rem,calc(100vw-1rem))] rounded-xl">
+                <div className="px-2 py-1.5 text-[11px] text-muted-foreground">Runtime permissions</div>
+                {RUNTIME_MODE_OPTIONS.map((option) => (
+                  <DropdownMenuItem
+                    key={option.value}
+                    title={option.value === "auto" ? "Automatic provider behavior" : undefined}
+                    onClick={() => void selectRuntimeMode(option.value)}
+                  >
+                    <RuntimeModeIcon mode={option.value} className="size-4" />
+                    <span className="min-w-0 flex-1">{option.label}</span>
+                    {option.value === runtimeMode ? <Check className="size-3.5" /> : null}
+                  </DropdownMenuItem>
+                ))}
+              </DropdownMenuContent>
+            </DropdownMenu>
+            <DropdownMenu
+              open={modelMenuOpen}
+              onOpenChange={(open) => {
+                setModelMenuOpen(open);
+                if (!open) return;
+                setModelSearch("");
+                setModelSearchOpen(false);
+                setModelProviderFilter(selectedKey.providerKey);
+              }}
+            >
+              <DropdownMenuTrigger asChild>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  className="hidden h-7 min-w-0 max-w-[min(100vw-8rem,28rem)] flex-none justify-center gap-1.5 rounded-md px-1.5 text-xs font-normal text-foreground/90 hover:bg-muted/25 hover:text-foreground md:inline-flex"
+                  title={`Model: ${modelDisplayName(selectedModel)}`}
                 >
                   {modelId ? <ProviderLogo providerId={selectedModel.providerId} /> : null}
                   <span className="min-w-0 truncate">
-                    <span className="text-foreground">
-                      {modelDisplayName(selectedModel)}
-                    </span>
+                    <span className="text-foreground">{modelDisplayName(selectedModel)}</span>
                     {selectedAttrs ? (
-                      <span className="text-muted-foreground">
-                        {" "}
-                        {selectedAttrs}
-                      </span>
+                      <span className="hidden text-muted-foreground md:inline">{" "}{selectedAttrs}</span>
                     ) : null}
                   </span>
                   <ChevronDown className="size-3 shrink-0 opacity-60" />
                 </Button>
               </DropdownMenuTrigger>
-              <DropdownMenuContent
-                align="start"
-                className="w-72"
-              >
-                <div className="p-1.5">
-                  <Input
-                    ref={modelSearchRef}
-                    value={modelSearch}
-                    onChange={(event) => setModelSearch(event.target.value)}
-                    placeholder="Search or provider:model…"
-                    aria-label="Search models"
-                    className="h-8 text-xs"
-                    onKeyDown={(event) => event.stopPropagation()}
-                  />
-                </div>
-                <div className="flex gap-1 overflow-x-auto border-b border-border/60 px-1 pb-1">
-                  {[
-                    { value: "all", label: "All" },
-                    ...availableProviders,
-                  ].map((provider) => (
-                    <button
-                      key={provider.value}
-                      type="button"
-                      className={cn(
-                        "inline-flex shrink-0 items-center gap-1 whitespace-nowrap rounded-full px-2.5 py-1 text-[11px] transition-colors",
-                        effectiveProviderFilter === provider.value
-                          ? "bg-primary text-primary-foreground"
-                          : "text-muted-foreground hover:bg-muted hover:text-foreground",
-                      )}
-                      onClick={() => {
-                        setModelProviderFilter(provider.value);
-                        setModelSearch("");
-                      }}
-                    >
-                      {provider.value === "all" ? null : <ProviderLogo providerId={provider.value} className="size-3" />}
-                      {provider.label}
-                    </button>
-                  ))}
-                </div>
-                <div className="max-h-60 overflow-y-auto">
-                  {favoriteEntries.length ? (
-                    <div>
-                      <div className="flex items-center gap-1.5 px-2.5 pb-1 pt-2 text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
-                        <Pin className="size-3 fill-current text-primary" aria-hidden="true" />
-                        Pinned
-                      </div>
-                      {favoriteEntries.map(renderModelOption)}
-                    </div>
-                  ) : null}
-                  {[...groupedModels.entries()].map(([providerId, group]) => {
-                    const connectionId =
-                      group.models.find((model) => model.connectionId)?.connectionId ||
-                      availableProviders.find((provider) => provider.value === providerId)?.connectionId;
-                    const pinnedCustom = customPinnedEntries.find((model) => model.providerId === providerId);
-                    const customValue =
-                      customModelInputs[providerId] ||
-                      pinnedCustom?.displayName ||
-                      (selectedKey.providerKey === providerId && !models.some((model) => model.id === modelId)
-                        ? selectedKey.modelId
-                        : "");
-                    const customKey = customValue.trim()
-                      ? modelKey(providerId, customValue.trim(), connectionId)
-                      : "";
-                    const customPinned = customKey ? favoriteModelKeys.includes(customKey) : false;
-                    return (
-                      <div key={providerId}>
-                        <div className="flex items-center gap-1.5 px-2.5 pb-1 pt-2 text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
-                          <ProviderLogo providerId={providerId} className="size-3" />
-                          {group.label}
-                        </div>
-                        {group.models.map(renderModelOption)}
-                        <div className="py-1">
-                          <div className="flex items-center gap-1.5 rounded-md px-1.5 py-1">
-                            <Check className={cn("size-3.5 shrink-0", modelId === customKey ? "opacity-100" : "opacity-0")} />
-                            <ProviderLogo providerId={providerId} className="size-4" />
-                            <Input
-                              value={customValue}
-                              onChange={(event) =>
-                                setCustomModelInputs((current) => ({
-                                  ...current,
-                                  [providerId]: event.target.value,
-                                }))
-                              }
-                              onKeyDown={(event) => {
-                                event.stopPropagation();
-                                if (event.key === "Enter") {
-                                  event.preventDefault();
-                                  useCustomModel(providerId, connectionId);
-                                }
-                              }}
-                              placeholder="Custom model ID"
-                              aria-label={`Custom ${group.label} model ID`}
-                              className="h-7 min-w-0 flex-1 border-0 bg-transparent px-0 pl-1.5 text-xs shadow-none focus-visible:ring-0"
-                            />
-                            <button
-                              type="button"
-                              disabled={!customKey}
-                              className="shrink-0 rounded p-1 text-muted-foreground hover:text-foreground disabled:pointer-events-none disabled:opacity-40"
-                              aria-label={customPinned ? `Unpin custom ${group.label} model` : `Pin custom ${group.label} model`}
-                              onClick={(event) => {
-                                event.preventDefault();
-                                event.stopPropagation();
-                                if (customKey) toggleFavoriteModel(customKey);
-                              }}
-                            >
-                              <Pin className={cn("size-3", customPinned ? "fill-current text-primary" : "")} />
-                            </button>
-                          </div>
-                        </div>
-                      </div>
-                    );
-                  })}
-                  {matchingModels.length === 0 && customPinnedEntries.length === 0 ? (
-                    <p className="px-2.5 py-3 text-xs text-muted-foreground">
-                      No models found.
-                    </p>
-                  ) : null}
-                </div>
-              </DropdownMenuContent>
+              {renderModelDropdownContent("start")}
             </DropdownMenu>
-            <ModelOptionsMenu
-              model={selectedModel}
-              modelParams={modelParams}
-              onModelParamsChange={applyModelParams}
-            />
-            <div className="ml-auto mr-1.5 flex items-center gap-0.5">
+            <span className="order-2 ml-auto flex size-8 shrink-0 items-center justify-center md:order-none md:ml-0 md:size-auto">
+              <ModelOptionsMenu
+                model={selectedModel}
+                modelParams={modelParams}
+                onModelParamsChange={applyModelParams}
+                mobileComposerControls={{
+                  modes: [],
+                  selectedModeId: selectedMode?.id,
+                  onModeChange: (nextModeId) => void selectMode(nextModeId),
+                  runtimeMode,
+                  runtimeOptions: RUNTIME_MODE_OPTIONS,
+                  onRuntimeModeChange: (nextRuntimeMode) => void selectRuntimeMode(nextRuntimeMode as RuntimeMode),
+                }}
+                className="size-8 rounded-lg border-0 bg-transparent text-muted-foreground/55 hover:bg-muted/35 hover:text-foreground md:size-7 md:rounded-md"
+              />
+            </span>
+            <div className="order-1 flex min-w-0 shrink-0 items-center gap-1 md:order-none md:ml-auto md:mr-1.5 md:gap-0.5">
+              <div className="flex min-w-0 items-center gap-1 text-[10px] text-muted-foreground/45 md:hidden">
+                <span className="shrink-0">Context</span>
+                <ContextUsageText
+                  used={contextUsed}
+                  total={contextTotal}
+                  modelMaximum={contextModelMaximum}
+                  estimated={contextEstimated}
+                  measuredAt={latestUsage?.completedAt}
+                  source={contextEstimated
+                    ? "current chat estimate"
+                    : latestUsage?.contextWindowSource === "runtime"
+                      ? "provider context telemetry"
+                      : "last model run"}
+                  selectionLabel={contextSelection}
+                  compacting={contextCompacting}
+                  className="h-8 px-0.5 text-[10px] text-muted-foreground/70 hover:text-foreground"
+                />
+                <span aria-hidden="true" className="mx-0.5 h-3 w-px shrink-0 bg-border/55" />
+                <span className="shrink-0">Usage</span>
+                <PlanUsageGauge
+                  provider={selectedUsage}
+                  providerName={selectedUsageProviderName}
+                  className="h-8 px-0.5 text-[10px]"
+                />
+              </div>
               <ContextUsageText
                 used={contextUsed}
                 total={contextTotal}
                 modelMaximum={contextModelMaximum}
                 estimated={contextEstimated}
                 measuredAt={latestUsage?.completedAt}
-                source={selectedRunUsage ? "last model run" : latestUsage ? "last model run on another model" : "current chat estimate"}
+                source={contextEstimated
+                  ? "current chat estimate"
+                  : latestUsage?.contextWindowSource === "runtime"
+                    ? "provider context telemetry"
+                    : "last model run"}
                 selectionLabel={contextSelection}
                 compacting={contextCompacting}
+                className="hidden h-7 px-0.5 text-[11px] text-muted-foreground/50 hover:text-foreground md:inline-flex"
               />
               <PlanUsageGauge
                 provider={selectedUsage}
                 providerName={selectedUsageProviderName}
+                className="hidden h-7 px-1 text-[10px] md:inline-flex"
               />
             </div>
           </div>
         )}
+      </div>
       </div>
     </div>
   );
@@ -8216,10 +8617,10 @@ export default function AppShell({ defaultCwd }: { defaultCwd: string }) {
     <div className="flex h-full min-w-0 flex-col overflow-hidden">
       <div
         className={cn(
-          "relative z-10 shrink-0 items-center justify-center px-3 pb-2 pt-8",
+          "relative z-10 shrink-0 items-center justify-center px-3 pb-2 pt-6",
           mobile ? "flex md:hidden" : "hidden md:flex",
         )}
-        aria-label="Metis AI"
+        aria-label="Metis"
       >
         {/* eslint-disable-next-line @next/next/no-img-element */}
         <img
@@ -8228,6 +8629,7 @@ export default function AppShell({ defaultCwd }: { defaultCwd: string }) {
           aria-hidden="true"
           className="absolute left-0 z-10 h-9 w-auto max-w-[5rem] object-contain"
         />
+        <span className="relative z-20 text-[13px] font-semibold tracking-[-0.01em] text-foreground/90">Metis</span>
         {/* eslint-disable-next-line @next/next/no-img-element */}
         <img
           src="/hand-right.png"
@@ -8254,7 +8656,6 @@ export default function AppShell({ defaultCwd }: { defaultCwd: string }) {
           type="button"
           className="flex w-full min-w-0 items-center gap-2 rounded-lg px-2.5 py-2 text-left text-[13px] text-muted-foreground transition-colors hover:bg-white/[0.03] hover:text-foreground"
           onClick={() => {
-            setMobileNavOpen(false);
             setCommandPaletteOpen(true);
           }}
         >
@@ -8276,7 +8677,6 @@ export default function AppShell({ defaultCwd }: { defaultCwd: string }) {
             setNotesOpen(true);
             setAutomationsOpen(false);
             setWorkspaceOpen(false);
-            setMobileNavOpen(false);
             navigateChat("notes");
           }}
         >
@@ -8300,7 +8700,6 @@ export default function AppShell({ defaultCwd }: { defaultCwd: string }) {
             setFocusedAutomationId(null);
             setNotesOpen(false);
             setWorkspaceOpen(false);
-            setMobileNavOpen(false);
             navigateChat("automations");
           }}
         >
@@ -8309,7 +8708,7 @@ export default function AppShell({ defaultCwd }: { defaultCwd: string }) {
         </button>
         
       </div>
-      <div className="min-h-0 flex-1 overflow-x-hidden overflow-y-auto px-2">
+      <div className="metis-sidebar-scroll min-h-0 flex-1 overflow-x-hidden overflow-y-auto px-2">
         <div className="space-y-0.5 pb-3 pt-1">
           {!chatsLoaded ? (
             <div className="space-y-1 px-1.5 py-1" aria-label="Loading chats" role="status">
@@ -8362,7 +8761,7 @@ export default function AppShell({ defaultCwd }: { defaultCwd: string }) {
                       aria-label="Generating response"
                     />
                   ) : null}
-                  {activeChatId !== c.id && (c.badge === "red" || c.pendingQuestion || attentionChatIds.includes(c.id)) ? (
+                  {activeChatId !== c.id && (c.badge === "red" || c.pendingQuestion || c.pendingApproval || attentionChatIds.includes(c.id)) ? (
                     <span
                       className="size-2 shrink-0 rounded-full bg-red-500"
                       aria-label="Needs your attention"
@@ -8462,14 +8861,13 @@ export default function AppShell({ defaultCwd }: { defaultCwd: string }) {
                         !isToolRunning(subagent.status) && "opacity-70",
                       )}
                       onClick={() => {
-                        setMobileNavOpen(false);
                         setActiveSubagent({ ...subagent });
                       }}
                       title={title}
                     >
                       <span className="absolute -left-3 top-1/2 w-3 border-t border-border/40" aria-hidden="true" />
                       {isToolRunning(subagent.status) ? (
-                        <span className="size-1.5 shrink-0 animate-pulse rounded-full bg-purple-400" />
+                        <span className="size-1.5 shrink-0 animate-pulse rounded-full bg-foreground/55" />
                       ) : (
                         <Check className="size-3 shrink-0 text-muted-foreground/70" />
                       )}
@@ -8507,7 +8905,6 @@ export default function AppShell({ defaultCwd }: { defaultCwd: string }) {
             void loadMemories();
             void refreshStatus();
             setSettingsOpen(true);
-            setMobileNavOpen(false);
           }}
         >
           <Settings className="size-3.5 shrink-0" />
@@ -8598,7 +8995,7 @@ export default function AppShell({ defaultCwd }: { defaultCwd: string }) {
 
   return (
     <div
-      className="flex h-dvh overflow-hidden bg-background"
+      className="metis-shell flex h-dvh overflow-hidden bg-background"
       onTouchStart={handleTouchStart}
       onTouchEnd={handleTouchEnd}
     >
@@ -8640,7 +9037,9 @@ export default function AppShell({ defaultCwd }: { defaultCwd: string }) {
         onOpenWorkspace={() => {
           toggleWorkspace();
         }}
-        onOpenModel={() => setModelMenuOpen(true)}
+        onOpenModel={() => {
+          setModelMenuOpen(true);
+        }}
         onToggleSidebar={toggleDesktopSidebar}
         onExport={exportCurrentChat}
       />
@@ -8711,32 +9110,42 @@ export default function AppShell({ defaultCwd }: { defaultCwd: string }) {
         </aside>
       ) : null}
 
-      <Sheet open={mobileNavOpen} onOpenChange={setMobileNavOpen}>
-        <SheetContent
-          side="left"
-          className="w-full max-w-none border-border/40 p-0"
+      <div className="md:hidden">
+        <button
+          type="button"
+          aria-label="Close sidebar"
+          tabIndex={mobileNavOpen ? 0 : -1}
+          className={cn(
+            "fixed inset-0 z-30 bg-black/20 transition-opacity duration-200",
+            mobileNavOpen ? "pointer-events-auto opacity-100" : "pointer-events-none opacity-0",
+          )}
+          onClick={() => setMobileNavOpen(false)}
+        />
+        <aside
+          aria-label="Chats sidebar"
+          className={cn(
+            "fixed inset-y-0 left-0 z-40 w-[min(20rem,calc(100vw-2.75rem))] border-r border-border/40 bg-popover shadow-2xl transition-transform duration-200 ease-out",
+            mobileNavOpen ? "visible translate-x-0" : "invisible -translate-x-full",
+          )}
           onTouchStart={handleTouchStart}
           onTouchEnd={handleTouchEnd}
         >
-          <SheetHeader className="sr-only">
-            <SheetTitle>Chats</SheetTitle>
-          </SheetHeader>
           {sidebar(true)}
-        </SheetContent>
-      </Sheet>
+        </aside>
+      </div>
 
       <div className="relative flex min-h-0 min-w-0 flex-1 flex-col">
         <UpdateBanner />
         {/* Thin top bar */}
-        <header className="relative z-20 flex h-12 shrink-0 items-center gap-2 border-b border-border/30 bg-background/90 px-3 backdrop-blur-xl md:px-4">
+        <header className="relative z-20 flex h-14 shrink-0 items-center gap-2.5 border-b border-border/55 bg-background px-3.5 md:h-12 md:gap-2 md:px-4">
           <Button
             variant="ghost"
             size="icon"
-            className="size-8 md:hidden"
+            className="size-11 md:hidden"
             onClick={() => setMobileNavOpen(true)}
             aria-label="Open sidebar"
           >
-            <Menu className="size-4" />
+            <Menu className="size-[19px]" />
           </Button>
           <Button
             type="button"
@@ -8749,9 +9158,46 @@ export default function AppShell({ defaultCwd }: { defaultCwd: string }) {
           >
             <PanelLeft className="size-4" />
           </Button>
+          {!notesOpen && !automationsOpen && !projectHomeId ? (
+            <>
+              <div className="min-w-0 flex-1 md:hidden" aria-hidden="true" />
+              <div className="absolute inset-y-0 left-14 right-[6.75rem] z-10 flex items-center justify-center md:hidden">
+                {modelsLoaded ? (
+                  <DropdownMenu
+                    open={mobileModelMenuOpen}
+                    onOpenChange={(open) => {
+                      setMobileModelMenuOpen(open);
+                      if (!open) return;
+                      setModelSearch("");
+                      setModelSearchOpen(false);
+                      setModelProviderFilter(selectedKey.providerKey);
+                    }}
+                  >
+                    <DropdownMenuTrigger asChild>
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="sm"
+                        className="mx-auto flex h-11 w-[min(38vw,18rem)] min-w-0 max-w-full items-center justify-center gap-1.5 rounded-xl px-2 text-[14px] font-semibold tracking-[-0.015em] text-foreground/95 hover:bg-muted/30"
+                        title={`Model: ${modelDisplayName(selectedModel)}`}
+                        aria-label={`Model: ${modelDisplayName(selectedModel)}`}
+                      >
+                        {modelId ? <ProviderLogo providerId={selectedModel.providerId} className="size-4" /> : null}
+                        <span className="min-w-0 truncate">{modelDisplayName(selectedModel)}</span>
+                        <ChevronDown className="size-3.5 shrink-0 opacity-55" />
+                      </Button>
+                    </DropdownMenuTrigger>
+                    {renderModelDropdownContent("center")}
+                  </DropdownMenu>
+                ) : (
+                  <Skeleton className="mx-auto h-8 w-32 rounded-lg bg-muted/45" />
+                )}
+              </div>
+            </>
+          ) : null}
           {projectHomeId && !notesOpen && !automationsOpen ? (
             <p className="min-w-0 flex-1 overflow-hidden text-ellipsis whitespace-nowrap text-center text-sm font-medium text-foreground md:text-left">
-              Project
+              {sidebarProjects.find((project) => project.id === projectHomeId)?.name || "Project"}
             </p>
           ) : automationsOpen ? (
             <p className="min-w-0 flex-1 overflow-hidden text-ellipsis whitespace-nowrap text-center text-sm font-medium text-foreground md:text-left">
@@ -8763,13 +9209,13 @@ export default function AppShell({ defaultCwd }: { defaultCwd: string }) {
             </p>
           ) : !isDraft && !isEmpty ? (
             <p
-              className="min-w-0 flex-1 overflow-hidden text-ellipsis whitespace-nowrap text-center text-sm text-muted-foreground md:text-left"
+              className="hidden min-w-0 flex-1 overflow-hidden text-ellipsis whitespace-nowrap text-sm text-muted-foreground md:block md:text-left"
               title={chatTitle}
             >
               {chatTitle}
             </p>
           ) : (
-            <div className="flex-1" />
+            <div className="hidden flex-1 md:block" />
           )}
           {!notesOpen && !isDraft && activeChatIncognito ? (
             <span className="px-2 text-xs text-muted-foreground">Incognito</span>
@@ -8778,7 +9224,7 @@ export default function AppShell({ defaultCwd }: { defaultCwd: string }) {
               type="button"
               variant="ghost"
               size="icon"
-              className="size-8"
+              className="size-11 md:size-8"
               aria-label="Share chat"
               title="Share chat"
               onClick={() => void openShareDialog()}
@@ -8792,13 +9238,13 @@ export default function AppShell({ defaultCwd }: { defaultCwd: string }) {
               type="button"
               variant={incognito ? "secondary" : "ghost"}
               size="icon"
-              className="size-8"
+              className="size-11 md:size-8"
               aria-label={incognito ? "Turn off Incognito" : "Turn on Incognito"}
               aria-pressed={incognito}
               title={incognito ? "Turn off Incognito" : "Turn on Incognito"}
               onClick={() => void toggleIncognito()}
             >
-              {incognito ? <EyeOff className="size-4" /> : <Eye className="size-4" />}
+              {incognito ? <EyeOff className="size-[19px] md:size-4" /> : <Eye className="size-[19px] md:size-4" />}
             </Button>
           ) : null}
           {!notesOpen && !automationsOpen && !projectHomeId ? (
@@ -8806,12 +9252,12 @@ export default function AppShell({ defaultCwd }: { defaultCwd: string }) {
               type="button"
               variant="ghost"
               size="icon"
-              className="size-8"
+              className="size-11 md:size-8"
               aria-label={workspaceOpen ? "Close workspace" : "Open workspace"}
               title={workspaceOpen ? "Close workspace" : "Open workspace"}
               onClick={toggleWorkspace}
             >
-              <PanelRight className="size-4" />
+              <PanelRight className="size-[19px] md:size-4" />
             </Button>
           ) : null}
         </header>
@@ -8860,29 +9306,42 @@ export default function AppShell({ defaultCwd }: { defaultCwd: string }) {
         ) : isEmpty ? (
           <div
             className={cn(
-              "flex min-h-0 flex-1 flex-col items-center px-4 pb-8",
-              queuedMessages.length ? "justify-end" : "justify-center",
+              "flex min-h-0 flex-1 flex-col items-center px-4",
+              queuedMessages.length ? "justify-end pb-10 sm:pb-8" : "justify-center pb-[10svh] sm:pb-8",
             )}
           >
             <h2 className={cn(
-              "text-2xl font-medium tracking-tight text-foreground/90",
-              incognito ? "mb-2" : "mb-8",
+              "text-center text-[28px] font-semibold leading-tight tracking-[-0.035em] text-foreground/95 sm:text-3xl",
+              incognito ? "mb-4" : "mb-5 sm:mb-2.5",
             )}>
-              What&apos;s on your mind?
+              {greeting}
             </h2>
-            {incognito ? (
+            {!incognito ? (
+              <p className="mb-6 hidden text-center text-sm font-normal text-muted-foreground/70 sm:block sm:text-base">
+                How can I help you today?
+              </p>
+            ) : (
               <p className="mb-8 max-w-md animate-in fade-in slide-in-from-top-1 text-center text-sm leading-relaxed text-muted-foreground duration-500">
                 Incognito mode is active. This chat is temporary and won&apos;t use or save your personal context.
               </p>
-            ) : null}
-            <div ref={composerContainerRef} className="w-full max-w-2xl">{composer}</div>
+            )}
+            <div
+              ref={composerContainerRef}
+              className={cn(
+                "w-full max-w-2xl max-sm:px-0",
+                composerFocused && "max-md:fixed max-md:inset-x-0 max-md:z-30 max-md:px-3",
+              )}
+              style={composerFocused ? { bottom: mobileKeyboardInset } : undefined}
+            >
+              {composer}
+            </div>
           </div>
         ) : (
           <>
             <div
               ref={messagesScrollRef}
               className="messages-composer-mask min-h-0 flex-1 overflow-y-auto"
-              style={{ ["--composer-mask-size" as string]: `${Math.max(56, composerHeight)}px` }}
+              style={{ ["--composer-mask-size" as string]: `${Math.max(88, composerHeight + 28)}px` }}
               onMouseUp={() => {
                 const selection = window.getSelection();
                 const text = selection?.toString().trim() || "";
@@ -8897,8 +9356,8 @@ export default function AppShell({ defaultCwd }: { defaultCwd: string }) {
               }}
             >
               <div
-                className="mx-auto w-full max-w-2xl space-y-6 px-4 pt-6 sm:px-6"
-                style={{ paddingBottom: Math.max(144, composerHeight + 24) }}
+                className="mx-auto w-full max-w-2xl space-y-4 px-3 pt-4 sm:space-y-6 sm:px-6 sm:pt-6"
+                style={{ paddingBottom: Math.max(172, composerHeight + 40) }}
               >
                 {recoveryStatus === "needs_attention" ? (
                   <div className={cn(
@@ -8972,7 +9431,7 @@ export default function AppShell({ defaultCwd }: { defaultCwd: string }) {
                           </div>
                         ) : null}
                         {editingMessageId === m.id ? (
-                          <div className="w-full max-w-[85%] space-y-2 rounded-3xl border border-border/60 bg-secondary/50 p-3">
+                          <div className="w-full max-w-[85%] space-y-2 rounded-xl border border-border/60 bg-secondary/45 p-3">
                             <Textarea
                               value={editValue}
                               onChange={(event) => setEditValue(event.target.value)}
@@ -9011,7 +9470,7 @@ export default function AppShell({ defaultCwd }: { defaultCwd: string }) {
                             </div>
                           </div>
                         ) : (
-                        <div className="max-w-[85%] space-y-2 overflow-hidden rounded-3xl bg-secondary/80 px-4 py-2.5 text-[15px] leading-relaxed">
+                        <div className="min-w-0 max-w-[92%] space-y-2 rounded-lg bg-secondary/70 px-3.5 py-2.5 text-[15px] leading-[1.55] [overflow-wrap:anywhere] sm:max-w-[85%] sm:px-4">
                           {m.attachments && m.attachments.length > 0 ? (
                             <div className="flex max-w-full gap-2 overflow-x-auto pb-1">
                               {m.attachments.map((att) => {
@@ -9102,7 +9561,7 @@ export default function AppShell({ defaultCwd }: { defaultCwd: string }) {
                     ) : m.role === "system" ? (
                       <ErrorMessageCard message={m.errorMessage || m.content} />
                     ) : (
-                      <div className="text-[15px] leading-relaxed text-foreground/95">
+                      <div className="assistant-message-text text-[15px] leading-[1.55] text-foreground/95">
                         {m.attachments && m.attachments.length > 0 ? (
                           <div className="mb-3 flex max-w-full flex-wrap gap-2">
                             {m.attachments.map((att) => {
@@ -9204,6 +9663,7 @@ export default function AppShell({ defaultCwd }: { defaultCwd: string }) {
                                 tools={block.tools}
  thinking={block.thinking ? [{ text: block.thinking.content, done: block.thinking.done, durationMs: block.thinking.durationMs }] : undefined}
                                 live={Boolean(m.streaming) && bi === lastBlockIndex}
+                                autoExpand={bi === lastBlockIndex}
                                 onOpenDiff={(tool) => {
                                   const baseDiff: ActiveDiff = {
                                     name: tool.name,
@@ -9273,12 +9733,14 @@ export default function AppShell({ defaultCwd }: { defaultCwd: string }) {
                             );
                           }
                           const displayContent = stripAssistantControlBlocks(block.content);
+                          const hasLaterActivity = blocks.slice(bi + 1).some((candidate) => candidate.type !== "text");
                           return (
                             <div
                               key={`text-${bi}`}
                               className={cn(
                                 "block w-full",
-                                                                bi > 0 && blocks[bi - 1]?.type === "text" && "mt-3",
+                                hasLaterActivity && "text-[14px] leading-6 text-foreground/75",
+                                bi > 0 && blocks[bi - 1]?.type === "text" && "mt-3",
                               )}
                             >
                               {m.streaming ? (
@@ -9304,12 +9766,19 @@ export default function AppShell({ defaultCwd }: { defaultCwd: string }) {
                     )}
                     {sourceLinks.length ? <MessageSources sources={sourceLinks} /> : null}
                     {m.role === "assistant" && !m.streaming && m.runMetadata ? (
-                      <div className="mt-3 flex flex-wrap gap-x-3 gap-y-1 text-[11px] text-muted-foreground">
-                        {typeof m.runMetadata.outputTokens === "number" ? (
-                          <span>Output: {m.runMetadata.outputTokens} Tokens</span>
-                        ) : null}
-                        {m.runMetadata.modelId ? <span>Model: {m.runMetadata.modelId}</span> : null}
-                        <span>Completed: {formatCompletedAt(m.runMetadata.completedAt)}</span>
+                      <div
+                        className="mt-2.5 text-[11px] tabular-nums text-muted-foreground/75"
+                        title={[
+                          typeof m.runMetadata.outputTokens === "number" ? `${formatMetricNumber(m.runMetadata.outputTokens)} output tokens` : null,
+                          m.runMetadata.modelId ? `Model ${m.runMetadata.modelId}` : null,
+                          `Completed ${formatCompletedAt(m.runMetadata.completedAt)}`,
+                        ].filter(Boolean).join(" · ")}
+                      >
+                        {[
+                          typeof m.runMetadata.outputTokens === "number" ? formatMetricNumber(m.runMetadata.outputTokens) : null,
+                          m.runMetadata.modelId || null,
+                          formatCompletedAt(m.runMetadata.completedAt),
+                        ].filter(Boolean).join(" · ")}
                       </div>
                     ) : null}
                     {m.role === "assistant" && m.suggestions?.length ? (
@@ -9359,16 +9828,15 @@ export default function AppShell({ defaultCwd }: { defaultCwd: string }) {
                       </div>
                     ) : null}
                     {canRevert ? (
-                    <div className={cn("mt-1 flex justify-end gap-1")}>
+                    <div className={cn("mt-1.5 flex flex-wrap justify-end gap-1")}>
                       <Button
                         type="button"
                         variant="ghost"
                         size="xs"
-                        className="h-6 gap-1 px-1.5 text-[11px] text-muted-foreground opacity-100 sm:opacity-60 sm:hover:opacity-100"
+                        className="h-9 gap-1 rounded-lg px-2 text-[11px] text-muted-foreground opacity-100 sm:h-6 sm:rounded-md sm:px-1.5 sm:opacity-60 sm:hover:opacity-100"
                         disabled={
                           reverting ||
-                          Boolean(editingMessageId) ||
-                          busy
+                          Boolean(editingMessageId)
                         }
                         onClick={() => void retryMessage(m)}
                         title="Revert and resend this message"
@@ -9381,7 +9849,20 @@ export default function AppShell({ defaultCwd }: { defaultCwd: string }) {
                         type="button"
                         variant="ghost"
                         size="xs"
-                        className="h-6 gap-1 px-1.5 text-[11px] text-muted-foreground opacity-100 sm:opacity-60 sm:hover:opacity-100"
+                        className="h-9 gap-1 rounded-lg px-2 text-[11px] text-muted-foreground opacity-100 sm:h-6 sm:rounded-md sm:px-1.5 sm:opacity-60 sm:hover:opacity-100"
+                        disabled={reverting || Boolean(editingMessageId) || busy}
+                        onClick={() => startEditing(m)}
+                        title="Edit this message and resend"
+                        aria-label="Edit this message and resend"
+                      >
+                        <Pencil className="size-3" />
+                        Edit
+                      </Button>
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="xs"
+                        className="h-9 gap-1 rounded-lg px-2 text-[11px] text-muted-foreground opacity-100 sm:h-6 sm:rounded-md sm:px-1.5 sm:opacity-60 sm:hover:opacity-100"
                         onClick={() => {
                           const raw = m.content || "";
                           const done = () => toast.success("Copied");
@@ -9415,7 +9896,7 @@ export default function AppShell({ defaultCwd }: { defaultCwd: string }) {
                         type="button"
                         variant="ghost"
                         size="xs"
-                        className="h-6 gap-1 px-1.5 text-[11px] text-muted-foreground opacity-100 sm:opacity-60 sm:hover:opacity-100"
+                        className="h-9 gap-1 rounded-lg px-2 text-[11px] text-muted-foreground opacity-100 sm:h-6 sm:rounded-md sm:px-1.5 sm:opacity-60 sm:hover:opacity-100"
                         disabled={
                           reverting ||
                           Boolean(editingMessageId) ||
@@ -9433,6 +9914,25 @@ export default function AppShell({ defaultCwd }: { defaultCwd: string }) {
                   </article>
                   );
                 })}
+                {activeChatIsRunning && !latestAssistantHasRunningTool ? (
+                  <div
+                    className="flex min-w-0 items-center gap-2 px-1 text-xs text-muted-foreground md:hidden"
+                    role="status"
+                    aria-label="Agent running"
+                  >
+                    <LoaderCircle className="size-3.5 shrink-0 animate-spin" />
+                    <span className="min-w-0 truncate">{liveStatus || "Agent running…"}</span>
+                  </div>
+                ) : null}
+                {pendingApproval ? (
+                  <div className="mb-4">
+                    <ApprovalPanel
+                      approval={pendingApproval}
+                      disabled={resolvingApproval}
+                      onDecision={(decision) => void submitApprovalDecision(decision)}
+                    />
+                  </div>
+                ) : null}
                 {pendingQuestion ? (
                   <section className="space-y-4 rounded-2xl border border-primary/30 bg-primary/[0.06] p-4 shadow-sm">
                     <div>
@@ -9594,9 +10094,16 @@ export default function AppShell({ defaultCwd }: { defaultCwd: string }) {
             </div>
 
             {/* Floating composer */}
-            <div ref={composerContainerRef} className="pointer-events-none absolute inset-x-0 bottom-0 z-20">
-              <div className="pointer-events-none pb-4 pt-3">
-                <div className="pointer-events-auto relative mx-auto w-full max-w-2xl px-4 sm:px-6">
+            <div
+              ref={composerContainerRef}
+              className={cn(
+                "pointer-events-none absolute inset-x-0 bottom-0 z-20 bg-gradient-to-t from-background via-background/95 to-transparent pt-7",
+                composerFocused && "max-md:fixed max-md:z-30",
+              )}
+              style={composerFocused ? { bottom: mobileKeyboardInset } : undefined}
+            >
+              <div className="pointer-events-none pt-2 sm:pt-3" style={{ paddingBottom: "max(0.75rem, env(safe-area-inset-bottom))" }}>
+                <div className="pointer-events-auto relative mx-auto w-full max-w-2xl px-3 sm:px-6">
                   {showScrollDown || hasCurrentAttention ? (
                     <Button
                       type="button"
@@ -9616,9 +10123,9 @@ export default function AppShell({ defaultCwd }: { defaultCwd: string }) {
                       ) : null}
                     </Button>
                   ) : null}
-                  {activeChatIsRunning ? (
+                  {activeChatIsRunning && !latestAssistantHasRunningTool ? (
                     <div
-                      className="mb-2 flex items-center justify-center gap-2 text-xs text-muted-foreground"
+                      className="mb-2 hidden items-center justify-center gap-2 text-xs text-muted-foreground md:flex"
                       role="status"
                       aria-label="Agent running"
                     >
@@ -9627,21 +10134,21 @@ export default function AppShell({ defaultCwd }: { defaultCwd: string }) {
                     </div>
                   ) : null}
                   {runningSubagents.length > 0 ? (
-                    <div className="mb-2 overflow-hidden rounded-xl border border-purple-400/20 bg-purple-400/[0.06]">
+                    <div className="mb-2 overflow-hidden rounded-lg border border-border/60 bg-muted/20">
                       <button
                         type="button"
-                        className="flex w-full items-center gap-2 px-3 py-2 text-left text-xs text-muted-foreground hover:bg-purple-400/[0.08]"
+                        className="flex w-full items-center gap-2 px-3 py-2 text-left text-xs text-muted-foreground hover:bg-muted/45"
                         onClick={() => setSubagentsExpanded((value) => !value)}
                         aria-expanded={subagentsExpanded}
                       >
-                        <Bot className="size-3.5 text-purple-300" />
+                        <Bot className="size-3.5 text-muted-foreground" />
                         <span className="font-medium text-foreground/80">
                           {runningSubagents.length} subagent{runningSubagents.length === 1 ? "" : "s"} running
                         </span>
                         <ChevronRight className={cn("ml-auto size-3.5 transition-transform", subagentsExpanded && "rotate-90")} />
                       </button>
                       {subagentsExpanded ? (
-                        <div className="border-t border-purple-400/15 px-2 py-1">
+                        <div className="border-t border-border/50 px-2 py-1">
                           {runningSubagents.map((tool) => (
                             <button
                               key={tool.id}
@@ -9652,7 +10159,7 @@ export default function AppShell({ defaultCwd }: { defaultCwd: string }) {
                               )}
                               onClick={() => setActiveSubagent(tool)}
                             >
-                              <LoaderCircle className="size-3 animate-spin text-purple-300" />
+                              <LoaderCircle className="size-3 animate-spin text-muted-foreground" />
                               <span className="min-w-0 flex-1 truncate">{tool.subagent?.title || tool.subagent?.prompt || tool.name}</span>
                               {tool.subagent?.model ? <span className="max-w-28 shrink-0 truncate text-[10px] text-muted-foreground/70">{tool.subagent.model}</span> : null}
                             </button>
@@ -9695,9 +10202,9 @@ export default function AppShell({ defaultCwd }: { defaultCwd: string }) {
       {!notesOpen && workspaceMounted ? (
         <aside
           className={cn(
-            "workspace-surface relative flex min-h-0 w-full shrink-0 flex-col overflow-hidden border-l border-border/30 bg-background/95 max-md:absolute max-md:inset-0 max-md:z-30 max-md:!w-full",
+            "workspace-surface relative flex min-h-0 w-full shrink-0 flex-col overflow-hidden border-l border-border/55 bg-background max-md:absolute max-md:inset-0 max-md:z-30 max-md:!w-full",
             workspaceTab === "browser" && "max-xl:absolute max-xl:inset-0 max-xl:z-40 max-xl:!w-full max-xl:border-l-0",
-            workspaceFullscreen && "fixed inset-[1%] z-50 !w-auto rounded-xl border border-border shadow-2xl ring-1 ring-foreground/10",
+            workspaceFullscreen && "fixed inset-[1%] z-50 !w-auto rounded-lg border border-border/70 shadow-xl",
             workspaceOpen ? "workspace-panel-enter" : "workspace-panel-exit",
           )}
           style={workspaceFullscreen ? undefined : {
@@ -9740,7 +10247,7 @@ export default function AppShell({ defaultCwd }: { defaultCwd: string }) {
                     setWorkspaceTab(tab);
                   }}
                   className={cn(
-                    "h-8 min-w-8 shrink-0 rounded-lg transition-[max-width,background-color,padding] duration-300 ease-out",
+                    "h-8 min-w-8 shrink-0 rounded-md transition-[max-width,background-color,padding] duration-200 ease-out",
                     workspaceTab === tab ? "max-w-40 gap-1.5 px-2" : "w-8 max-w-8 gap-0 overflow-visible px-0",
                   )}
                   aria-label={tab === "plan" ? "Plans" : tab === "canvas" ? "Canvas" : tab[0].toUpperCase() + tab.slice(1)}
@@ -9784,11 +10291,11 @@ export default function AppShell({ defaultCwd }: { defaultCwd: string }) {
             </Button>
           </div>
           <div className={cn("flex min-h-0 flex-1 flex-col gap-2 overflow-hidden p-2.5", workspaceTab === "browser" && "max-sm:p-1.5")}>
-            {loadingChatId === activeChatId ? (
+            {loadingChatId !== null && loadingChatId === activeChatId ? (
               <WorkspaceLoadingSkeleton />
             ) : workspaceTab === "browser" ? (
               <div className="flex min-h-0 flex-1 flex-col gap-1.5">
-                <div className="flex h-8 shrink-0 items-end gap-1 overflow-x-auto rounded-xl border border-border/35 bg-muted/20 px-1 pt-1 max-sm:h-7 max-sm:rounded-lg">
+                <div className="flex h-8 shrink-0 items-end gap-1 overflow-x-auto rounded-lg border border-border/50 bg-muted/15 px-1 pt-1 max-sm:h-7">
                   {browserTabs.map((tab) => (
                     <div key={tab.id} className={cn(
                       "group flex h-7 max-w-52 shrink-0 items-center rounded-t-lg border border-transparent text-xs transition-colors",
@@ -9843,7 +10350,7 @@ export default function AppShell({ defaultCwd }: { defaultCwd: string }) {
                 </div>
 
                 <form
-                  className="flex h-10 shrink-0 items-center gap-1 rounded-xl border border-border/40 bg-background/80 p-1 shadow-sm max-sm:h-9 max-sm:rounded-lg"
+                  className="flex h-10 shrink-0 items-center gap-1 rounded-lg border border-border/55 bg-background p-1 max-sm:h-9"
                   onSubmit={(event) => {
                     event.preventDefault();
                     navigateBrowser(browserInput);
@@ -10082,13 +10589,20 @@ export default function AppShell({ defaultCwd }: { defaultCwd: string }) {
             ) : workspaceTab === "files" ? (
               <RemoteFileEditor cwd={remoteFileCwd} onCwdChange={setRemoteFileCwd} />
             ) : !activeWorkspace ? (
-              <p className="p-2 text-xs text-muted-foreground">
-                {workspaceTab === "plan"
-                  ? "No plans yet."
-                  : workspaceTab === "canvas"
-                    ? "No canvases yet."
-                    : "No workspace selected."}
-              </p>
+              <div className="flex min-h-0 flex-1 items-center justify-center px-6 text-center">
+                <div className="max-w-64 space-y-1.5">
+                  <p className="text-sm font-medium text-foreground/80">
+                    {workspaceTab === "plan" ? "No plans yet" : workspaceTab === "canvas" ? "No canvas yet" : "Nothing selected"}
+                  </p>
+                  <p className="text-xs leading-relaxed text-muted-foreground">
+                    {workspaceTab === "plan"
+                      ? "Plans created in chat appear here automatically."
+                      : workspaceTab === "canvas"
+                        ? "Canvas output appears here as soon as the agent creates it."
+                        : "Choose another workspace tab."}
+                  </p>
+                </div>
+              </div>
             ) : activeWorkspace.type === "plan" ? (
               <>
                 <div className="flex flex-wrap items-center justify-end gap-1">
@@ -10123,15 +10637,15 @@ export default function AppShell({ defaultCwd }: { defaultCwd: string }) {
                   ) : null}
                 </div>
                 {runningSubagents.length > 0 ? (
-                  <section className="shrink-0 rounded-lg border border-purple-400/20 bg-purple-400/[0.06]">
+                  <section className="shrink-0 rounded-lg border border-border/60 bg-muted/20">
                     <div className="flex items-center gap-2 px-2.5 py-2 text-xs">
-                      <Bot className="size-3.5 text-purple-300" />
+                      <Bot className="size-3.5 text-muted-foreground" />
                       <span className="font-medium text-foreground/80">Subagents</span>
                       <span className="text-muted-foreground/70">
                         {runningSubagents.length} running
                       </span>
                     </div>
-                    <div className="border-t border-purple-400/15 px-2 py-1">
+                    <div className="border-t border-border/50 px-2 py-1">
                       {runningSubagents.map((tool) => (
                         <button
                           key={tool.id}
@@ -10142,7 +10656,7 @@ export default function AppShell({ defaultCwd }: { defaultCwd: string }) {
                           )}
                           onClick={() => setActiveSubagent(tool)}
                         >
-                          <LoaderCircle className="size-3 animate-spin text-purple-300" />
+                          <LoaderCircle className="size-3 animate-spin text-muted-foreground" />
                           <span className="min-w-0 flex-1 truncate">
                             {tool.subagent?.title || tool.subagent?.prompt || tool.name}
                           </span>
@@ -10167,7 +10681,7 @@ export default function AppShell({ defaultCwd }: { defaultCwd: string }) {
                       }}
                       aria-label="Plan title"
                       placeholder="Plan title"
-                      className="h-8 flex-1 text-sm font-medium"
+                      className="h-9 flex-1 border-transparent bg-transparent px-1 text-base font-semibold tracking-tight shadow-none hover:bg-muted/25 focus-visible:border-border/40 focus-visible:bg-muted/20"
                     />
                     <Button
                       type="button"
@@ -10232,6 +10746,7 @@ export default function AppShell({ defaultCwd }: { defaultCwd: string }) {
                     }}
                     aria-label="Plan content"
                     placeholder="Write the plan…"
+                    className="rounded-xl border border-border/40 bg-card/35 px-4 py-4 text-sm leading-6 shadow-inner shadow-black/[0.025] focus-visible:bg-card/50"
                   />
                 </div>
               </>
@@ -10247,7 +10762,7 @@ export default function AppShell({ defaultCwd }: { defaultCwd: string }) {
                       }}
                       aria-label="Canvas title"
                       placeholder="Canvas title"
-                      className="h-8 flex-1 text-sm font-medium"
+                      className="h-9 flex-1 border-transparent bg-transparent px-1 text-base font-semibold tracking-tight shadow-none hover:bg-muted/25 focus-visible:border-border/40 focus-visible:bg-muted/20"
                     />
                     <Button
                       type="button"
@@ -10312,6 +10827,7 @@ export default function AppShell({ defaultCwd }: { defaultCwd: string }) {
                     }}
                     aria-label="Canvas content"
                     placeholder="Write notes, requirements, or a working draft…"
+                    className="rounded-xl border border-border/40 bg-card/35 px-4 py-4 text-sm leading-6 shadow-inner shadow-black/[0.025] focus-visible:bg-card/50"
                   />
                 </div>
               </>

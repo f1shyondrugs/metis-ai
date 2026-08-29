@@ -5,6 +5,7 @@ import { revertMessages } from "@/lib/revert";
 import { getChat, saveChat } from "@/lib/db-store";
 import { revertChatNotes } from "@/lib/shared-context";
 import { hydrateToolsForRevert } from "@/lib/tool-persistence";
+import { withoutProviderSessionBindings } from "@/lib/providers/session-bindings";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -43,7 +44,22 @@ export async function POST(req: Request, { params }: Params) {
   const result = revertMessages(messagesForRevert, rollbackStart, getAgentCwd(ownerId));
   const revertedNotes = revertChatNotes(id, ownerId, chat.messages[index].createdAt);
   chat.messages = chat.messages.slice(0, body.keepMessage === true ? index + 1 : index);
+
+  // A visual transcript revert is not enough for native providers. Their
+  // session cursor still contains the removed turn, so resuming it would put
+  // the reverted message straight back into model context. Invalidate every
+  // native continuation and let the next run bootstrap from the already-trimmed
+  // durable Metis history instead.
   delete chat.agentId;
+  chat.sessionState = withoutProviderSessionBindings(chat.sessionState);
+
+  // Follow-ups and interactive state created after this point belong to the
+  // abandoned branch as well. They must never fire after Retry/Revert.
+  delete chat.queuedMessages;
+  delete chat.queueMessage;
+  delete chat.pendingQuestion;
+  delete chat.pendingApproval;
+
   if (result.canvasUpdated) {
     delete chat.canvas;
     if (chat.workspaces) {

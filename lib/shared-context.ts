@@ -175,11 +175,16 @@ export function listNotes(input: {
     .filter((note) => !search || `${note.title}\n${note.content}`.toLocaleLowerCase().includes(search));
 }
 
-export function getNote(id: string, ownerId?: string) {
+export function getNote(id: string, ownerId?: string, options?: { chatId?: string; workspaceId?: string }) {
   if (!id.trim()) return null;
+  const chatId = options?.chatId?.trim();
+  const workspaceId = options?.workspaceId?.trim();
   const row = getDatabase().prepare(
-    "SELECT data FROM notes WHERE id = ? AND (? IS NULL OR owner_id = ?)",
-  ).get(id, ownerId ?? null, ownerId ?? null);
+    `SELECT data FROM notes
+     WHERE id = ?
+       AND (? IS NULL OR owner_id = ?)
+       AND (? IS NULL OR scope = 'global' OR (scope = 'chat' AND chat_id = ?) OR (scope = 'workspace' AND workspace_id = ?))`,
+  ).get(id, ownerId ?? null, ownerId ?? null, (chatId || workspaceId) ?? null, chatId ?? null, workspaceId ?? null);
   return rowToNote(row);
 }
 
@@ -228,7 +233,11 @@ export function createNote(input: NoteWriteInput & { ownerId?: string; idempoten
     scope: input.scope || (input.workspaceId ? "workspace" : input.chatId ? "chat" : "global"),
     title: boundedText(input.title, 200) || (input.kind === "project" ? "Untitled project" : "Untitled note"),
     content: boundedText(input.content, 50_000),
-    ...(input.kind === "project" ? { kind: "project" as const } : { kind: "note" as const }),
+    ...(input.kind === "project"
+      ? { kind: "project" as const }
+      : input.kind === "learned_fact"
+        ? { kind: "learned_fact" as const }
+        : { kind: "note" as const }),
     ...(input.projectId ? { projectId: input.projectId } : {}),
     ...(normalizeNoteTodos(input.todos).length ? { todos: normalizeNoteTodos(input.todos) } : {}),
     color: /^#[0-9a-f]{6}$/i.test(input.color || "") ? String(input.color) : "#fef08a",

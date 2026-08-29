@@ -9,6 +9,7 @@ import {
 } from "node:fs";
 import path from "node:path";
 import { config } from "@/lib/config";
+import { RUNTIME_MODES } from "@/lib/runtime-mode";
 
 export type ToolPart = {
   id: string;
@@ -73,8 +74,17 @@ export type ChatMessage = {
     connectionId?: string;
     outputTokens?: number;
     inputTokens?: number;
+    cachedInputTokens?: number;
+    cacheWriteInputTokens?: number;
     inputTokensEstimated?: boolean;
     totalTokens?: number;
+    totalProcessedTokens?: number;
+    contextUsedTokens?: number;
+    contextWindow?: number;
+    contextWindowSource?: "provider" | "runtime" | "stored-provider" | "registry" | "catalog" | "inferred" | "estimate";
+    maxOutputTokens?: number;
+    compactsAutomatically?: boolean;
+    autoCompactThreshold?: number;
     costUsd?: number;
     completedAt: string;
   };
@@ -124,7 +134,7 @@ export type NoteSize = {
   height: number;
 };
 
-export type NoteKind = "note" | "project";
+export type NoteKind = "note" | "project" | "learned_fact";
 
 export type NoteTodo = {
   id: string;
@@ -336,6 +346,22 @@ export type ChatInputState = {
   updatedAt: string;
 };
 
+export type ProviderSessionBinding = {
+  execution: "cursor-agent" | "codex-sdk" | "claude-agent" | "antigravity-cli" | "grok-cli" | "opencode-cli" | "ai-sdk";
+  connectionId: string;
+  contextOwner: "native" | "metis";
+  /** Cursor/session that completed at least one persisted turn. */
+  lastKnownGoodCursor?: string;
+  /** Newly observed cursor; promoted only after the turn is durably completed. */
+  candidateCursor?: string;
+  modelId?: string;
+  lastContextTokens?: number;
+  lastContextWindow?: number;
+  lastCompactionAt?: string;
+  recoveryGeneration?: number;
+  updatedAt: string;
+};
+
 export type ChatSessionState = {
   input?: string;
   /** ISO timestamp for last-write-wins merge of composer text across devices. */
@@ -359,6 +385,7 @@ export type ChatSessionState = {
   unpinnedGlobalNoteIds?: string[];
   filters?: Record<string, string | boolean | number | null>;
   modeId?: string;
+  providerSessions?: Record<string, ProviderSessionBinding>;
 };
 
 export type ToolPermissionCategory =
@@ -401,6 +428,8 @@ export type Chat = {
   agentId?: string;
   /** Selected provider/model key for this chat. */
   modelId?: string;
+  /** Runtime execution mode; see lib/runtime-mode.ts. */
+  runtimeMode?: string;
   /** Cursor model params, e.g. [{ id: "fast", value: "true" }] */
   modelParams?: Array<{ id: string; value: string }>;
   messages: ChatMessage[];
@@ -423,6 +452,14 @@ export type Chat = {
   runUpdatedAt?: string;
   queueMessage?: string;
   pendingQuestion?: PendingChatQuestion;
+  pendingApproval?: {
+    id: string;
+    title: string;
+    command?: string;
+    files?: Array<{ path: string; status: string }>;
+    createdAt: string;
+  };
+  approvedPatterns?: string[];
   badge?: ChatBadge;
   share?: ChatShare;
   pinned?: boolean;
@@ -446,6 +483,14 @@ export type ChatIndexEntry = {
   runUpdatedAt?: string;
   queueMessage?: string;
   pendingQuestion?: PendingChatQuestion;
+  pendingApproval?: {
+    id: string;
+    title: string;
+    command?: string;
+    files?: Array<{ path: string; status: string }>;
+    createdAt: string;
+  };
+  approvedPatterns?: string[];
   badge?: ChatBadge;
   pinned?: boolean;
   archived?: boolean;
@@ -478,6 +523,7 @@ export type GlobalModelSettings = {
   modelId?: string;
   modelParams?: Array<{ id: string; value: string }>;
   modelParamsByModel?: Record<string, Array<{ id: string; value: string }>>;
+  lastModelByProvider?: Record<string, string>;
   subagentModelEnabled?: boolean;
   subagentModelId?: string;
   draftInput?: string;
@@ -676,6 +722,9 @@ export function updateChat(
     runStatus?: ChatRunStatus;
     runUpdatedAt?: string | null;
     pendingQuestion?: PendingChatQuestion | null;
+    runtimeMode?: string | null;
+    pendingApproval?: Chat["pendingApproval"] | null;
+    approvedPatterns?: string[] | null;
   },
   ownerId?: string,
 ): Chat | null {
@@ -784,6 +833,51 @@ export function updateChat(
     chat.runUpdatedAt = patch.runUpdatedAt || nowIso();
   } else if (patch.runUpdatedAt === null) {
     delete chat.runUpdatedAt;
+  }
+  if (patch.runtimeMode === null) {
+    delete chat.runtimeMode;
+  } else if (typeof patch.runtimeMode === "string") {
+    const runtimeMode = patch.runtimeMode.trim();
+    if (runtimeMode && (RUNTIME_MODES as readonly string[]).includes(runtimeMode)) {
+      chat.runtimeMode = runtimeMode;
+    }
+  }
+  if (patch.pendingApproval === null) {
+    delete chat.pendingApproval;
+  } else if (patch.pendingApproval) {
+    const pendingApproval = patch.pendingApproval;
+    if (pendingApproval.id.trim() && pendingApproval.title.trim()) {
+      chat.pendingApproval = {
+        id: pendingApproval.id.slice(0, 200),
+        title: pendingApproval.title.slice(0, 500),
+        ...(typeof pendingApproval.command === "string" && pendingApproval.command.trim()
+          ? { command: pendingApproval.command.slice(0, 20_000) }
+          : {}),
+        ...(Array.isArray(pendingApproval.files)
+          ? {
+              files: pendingApproval.files
+                .filter((file) => file && typeof file.path === "string" && file.path.trim())
+                .slice(0, 100)
+                .map((file) => ({
+                  path: file.path.slice(0, 2_000),
+                  status: String(file.status || "").slice(0, 100),
+                })),
+            }
+          : {}),
+        createdAt: pendingApproval.createdAt || nowIso(),
+      };
+    }
+  }
+  if (patch.approvedPatterns === null) {
+    delete chat.approvedPatterns;
+  } else if (Array.isArray(patch.approvedPatterns)) {
+    const approvedPatterns = [...new Set(
+      patch.approvedPatterns
+        .map((pattern) => String(pattern || "").trim())
+        .filter(Boolean),
+    )].slice(0, 100);
+    if (approvedPatterns.length) chat.approvedPatterns = approvedPatterns;
+    else delete chat.approvedPatterns;
   }
   if (patch.pendingQuestion === null) {
     delete chat.pendingQuestion;
@@ -921,6 +1015,7 @@ export function saveGlobalModelSettings(settings: GlobalModelSettings): GlobalMo
     ...(settings.modelId ? { modelId: settings.modelId } : {}),
     ...(settings.modelParams ? { modelParams: settings.modelParams } : {}),
     ...(settings.modelParamsByModel ? { modelParamsByModel: settings.modelParamsByModel } : {}),
+    ...(settings.lastModelByProvider ? { lastModelByProvider: settings.lastModelByProvider } : {}),
   };
   atomicWriteJson(SETTINGS_PATH, next);
   return next;

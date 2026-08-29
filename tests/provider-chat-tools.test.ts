@@ -14,19 +14,32 @@ test("chat models keep tool support; embeddings/tts/whisper do not", () => {
   assert.equal(modelSupportsChatTools("gpt-3.5-turbo-instruct"), false);
 });
 
-test("runner dispatches Codex and Claude Code to their MCP agent SDKs", () => {
-  const source = readFileSync(new URL("../lib/providers/runner.ts", import.meta.url), "utf8");
-  assert.match(source, /execution === "codex-sdk"\) return runCodex/);
-  assert.match(source, /execution === "claude-agent"\) return runClaude/);
-  assert.match(source, /execution === "antigravity-cli"\) return runAntigravity/);
-  assert.match(source, /runAntigravitySdkJob/);
-  assert.match(source, /authType === "oauth"/);
-  assert.doesNotMatch(source, /runOAuthAiSdk\(context, "codex"\)/);
-  assert.doesNotMatch(source, /claudeSecretIsJsonOAuth/);
-  assert.match(source, /claudeMcpServers\(getMcpServers/);
-  assert.match(source, /strictMcpConfig: true/);
-  assert.match(source, /execution === "grok-cli"\) return runGrok/);
-  assert.match(source, /execution === "opencode-cli"\) return runOpenCode/);
-  assert.match(source, /runAcpStdioAgent/);
-  assert.match(source, /canonicalizeToolPart/);
+test("runner dispatches native providers through dedicated MCP-aware adapters", () => {
+  const runner = readFileSync(new URL("../lib/providers/runner.ts", import.meta.url), "utf8");
+  const index = readFileSync(new URL("../lib/providers/adapters/index.ts", import.meta.url), "utf8");
+  const codex = readFileSync(new URL("../lib/providers/adapters/codex.ts", import.meta.url), "utf8");
+  const claude = readFileSync(new URL("../lib/providers/adapters/claude.ts", import.meta.url), "utf8");
+  const antigravity = readFileSync(new URL("../lib/providers/adapters/antigravity.ts", import.meta.url), "utf8");
+
+  assert.match(runner, /providerAdapterForExecution\(providerExecution\(providerKey\)\)\.runTurn/);
+  assert.match(index, /"codex-sdk": codexAdapter/);
+  assert.match(index, /"claude-agent": claudeAdapter/);
+  assert.match(index, /"antigravity-cli": antigravityAdapter/);
+  assert.match(codex, /runTurn: runCodex/);
+  assert.match(claude, /runTurn: runClaude/);
+  assert.match(antigravity, /runOfficialAntigravityJob|runAntigravitySdkJob/);
+  assert.match(antigravity, /authType === "oauth"/);
+  assert.doesNotMatch(runner, /runOAuthAiSdk\(context, "codex"\)/);
+  assert.match(claude, /claudeMcpServers\(/);
+  assert.match(claude, /strictMcpConfig: true/);
+});
+
+test("grok and opencode stay on the ACP stdio path via registered adapters", () => {
+  const runner = readFileSync(new URL("../lib/providers/runner.ts", import.meta.url), "utf8");
+  const index = readFileSync(new URL("../lib/providers/adapters/index.ts", import.meta.url), "utf8");
+  const acp = readFileSync(new URL("../lib/providers/adapters/acp-cli.ts", import.meta.url), "utf8");
+  assert.doesNotMatch(runner, /runAcpStdioAgent/);
+  assert.match(index, /"grok-cli": grokAdapter/);
+  assert.match(index, /"opencode-cli": opencodeAdapter/);
+  assert.match(acp, /runAcpStdioAgent/);
 });

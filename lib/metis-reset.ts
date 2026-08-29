@@ -16,6 +16,7 @@ const RESET_TABLES = [
   "notes",
   "idempotency_keys",
   "pending_questions",
+  "pending_approvals",
   "run_events",
   "automation_runs",
   "automations",

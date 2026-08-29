@@ -155,6 +155,7 @@ export async function POST(req: Request) {
     }
     if (
       chat.pendingQuestion ||
+      chat.pendingApproval ||
       chat.runStatus === "waiting_input" ||
       chat.runStatus === "waiting_for_user"
     ) {
