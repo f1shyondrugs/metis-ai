@@ -27,3 +27,8 @@ test("switching project hubs remounts, clears stale data, and aborts the previou
   assert.match(homeSource, /return \(\) => controller\.abort\(\)/);
   assert.doesNotMatch(homeSource, /\.then\(load\)/);
 });
+
+test("project hub uploads files as multipart FormData", () => {
+ assert.match(homeSource, /const form = new FormData\(\)/);
+ assert.match(homeSource, /form\.set\("file", file, file\.name\)/);
+});

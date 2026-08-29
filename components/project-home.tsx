@@ -171,23 +171,37 @@ export function ProjectHome({
   const list = Array.from(files);
   if (!list.length) return;
   setBusy(true);
+  setError("");
   try {
    for (const file of list) {
     if (file.size > MAX_PROJECT_FILE_BYTES) {
      setError(`${file.name} is larger than ${MAX_PROJECT_FILE_BYTES / 1024 / 1024}MB.`);
      continue;
     }
-    const dataUrl = await fileToBase64(file);
+    const form = new FormData();
+    form.set("file", file, file.name);
+    form.set("name", file.name);
+    if (file.type) form.set("mimeType", file.type);
     const response = await fetch(`/api/projects/${encodeURIComponent(projectId)}/files`, {
-     method: "POST",
-     headers: { "Content-Type": "application/json" },
-     body: JSON.stringify({ name: file.name, mimeType: file.type || "application/octet-stream", data: dataUrl }),
-    });
-    if (!response.ok) {
-     const body = (await response.json().catch(() => ({}))) as { error?: string };
-     throw new Error(body.error || `Could not upload ${file.name}.`);
+              method: "POST",
+              body: form,
+            });
+            if (!response.ok) {
+              const fallback = await fetch(`/api/projects/${encodeURIComponent(projectId)}/files`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                  name: file.name,
+                  mimeType: file.type || undefined,
+                  data: await fileToBase64(file),
+                }),
+              });
+              if (!fallback.ok) {
+                const body = (await fallback.json().catch(() => ({}))) as { error?: string };
+                throw new Error(body.error || `Could not upload ${file.name}.`);
+              }
+            }
     }
-   }
    load();
   } catch (cause) {
    setError(cause instanceof Error ? cause.message : "Could not upload files.");
@@ -357,38 +371,48 @@ export function ProjectHome({
 
    <section className="grid gap-3">
     <h3 className="text-sm font-medium">Files</h3>
-    <label
-     className={cn(
-      "flex cursor-pointer flex-col items-center justify-center gap-2 rounded-2xl border border-dashed px-4 py-8 text-center transition-colors",
-      dragOver ? "border-foreground/40 bg-white/[0.04]" : "border-border/70 hover:border-foreground/25 hover:bg-white/[0.02]",
-     )}
-     onDragOver={(event) => {
-      event.preventDefault();
-      setDragOver(true);
-     }}
-     onDragLeave={() => setDragOver(false)}
-     onDrop={(event) => {
-      event.preventDefault();
-      setDragOver(false);
-      if (event.dataTransfer.files.length) void uploadFiles(event.dataTransfer.files);
-     }}
-    >
-     <Upload className="size-5 text-muted-foreground" />
-     <div className="text-sm text-muted-foreground">
-      {busy ? "Uploading…" : "Drop files here or click to upload"}
-     </div>
-     <input
-      ref={fileInputRef}
-      type="file"
-      multiple
-      className="hidden"
-      onChange={(event) => {
-       const files = event.target.files;
-       event.target.value = "";
-       if (files?.length) void uploadFiles(files);
+    <div
+      role="button"
+      tabIndex={0}
+      className={cn(
+        "relative flex cursor-pointer flex-col items-center justify-center gap-2 rounded-2xl border border-dashed px-4 py-8 text-center transition-colors",
+        dragOver ? "border-foreground/40 bg-white/[0.04]" : "border-border/70 hover:border-foreground/25 hover:bg-white/[0.02]",
+      )}
+      onClick={() => fileInputRef.current?.click()}
+      onKeyDown={(event) => {
+        if (event.key === "Enter" || event.key === " ") {
+          event.preventDefault();
+          fileInputRef.current?.click();
+        }
       }}
-     />
-    </label>
+      onDragOver={(event) => {
+        event.preventDefault();
+        setDragOver(true);
+      }}
+      onDragLeave={() => setDragOver(false)}
+      onDrop={(event) => {
+        event.preventDefault();
+        setDragOver(false);
+        if (event.dataTransfer.files.length) void uploadFiles(event.dataTransfer.files);
+      }}
+    >
+      <Upload className="size-5 text-muted-foreground" />
+      <div className="text-sm text-muted-foreground">
+        {busy ? "Uploading…" : "Drop files here or click to upload"}
+      </div>
+      <input
+        ref={fileInputRef}
+        type="file"
+        multiple
+        className="sr-only"
+        onClick={(event) => event.stopPropagation()}
+        onChange={(event) => {
+          const files = event.target.files;
+          event.target.value = "";
+          if (files?.length) void uploadFiles(files);
+        }}
+      />
+    </div>
     <ul className="grid gap-1">
      {data.files.map((file) => (
       <li key={file.id} className="flex items-center gap-2 rounded-xl px-2 py-1.5 hover:bg-muted/40">

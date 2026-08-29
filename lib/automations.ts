@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { getDatabase, transaction } from "@/lib/sqlite";
 import { appendMessage, createChat, deleteChat, getChat, saveChat } from "@/lib/db-store";
 import { enqueueJob, getJob } from "@/lib/db-jobs";
+import { getProject } from "@/lib/projects";
 
 export const MAX_ACTIVE_AUTOMATIONS = 20;
 export const MIN_AUTOMATION_INTERVAL_MINUTES = 60;
@@ -43,6 +44,7 @@ export type Automation = {
   /** Context/source chat selected when the automation is created. Runs use their own chats. */
   chatId: string;
   chatTitle?: string;
+  projectId?: string | null;
   name: string;
   prompt: string;
   creator: AutomationCreator;
@@ -82,6 +84,7 @@ type AutomationRow = {
   owner_id: string;
   chat_id: string;
   chat_title?: string;
+  project_id?: string | null;
   name: string;
   prompt: string;
   creator?: AutomationCreator | null;
@@ -225,6 +228,7 @@ function rowToAutomation(row: AutomationRow): Automation {
     ownerId: row.owner_id,
     chatId: row.chat_id,
     ...(row.chat_title ? { chatTitle: row.chat_title } : {}),
+    ...(row.project_id ? { projectId: row.project_id } : {}),
     name: row.name,
     prompt: row.prompt,
     creator: row.creator === "agent" ? "agent" : "user",
@@ -318,6 +322,13 @@ function hasActiveRun(automationId: string) {
   ).get(automationId));
 }
 
+function resolvedProjectId(ownerId: string, projectId?: string | null) {
+  if (projectId === null) return null;
+  const id = typeof projectId === "string" ? projectId.trim() : "";
+  if (!id) return undefined;
+  return getProject(id, ownerId) ? id : null;
+}
+
 export function createAutomation(input: {
   ownerId: string;
   chatId?: string;
@@ -331,6 +342,7 @@ export function createAutomation(input: {
   graph?: AutomationGraph;
   schedule: AutomationSchedule;
   timezone?: string;
+  projectId?: string | null;
 }) {
   const name = input.name.trim().slice(0, 200);
   const prompt = input.prompt.trim().slice(0, 100_000);
@@ -359,13 +371,14 @@ export function createAutomation(input: {
   const graph = normalizeGraph(input.graph, fallbackGraph);
   getDatabase().prepare(
     `INSERT INTO automations
-      (id, owner_id, chat_id, name, prompt, creator, mode_id, model_id, extended_model_id,
+      (id, owner_id, chat_id, project_id, name, prompt, creator, mode_id, model_id, extended_model_id,
        max_run_minutes, graph_json, schedule_kind, schedule_value, timezone, status, next_run_at, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, ?, ?)`,
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, ?, ?)`,
   ).run(
     id,
     input.ownerId,
     chat.id,
+      resolvedProjectId(input.ownerId, input.projectId) || null,
     name,
     prompt,
     input.creator === "agent" ? "agent" : "user",
@@ -414,7 +427,7 @@ export function listAutomations(ownerId: string) {
 export function updateAutomation(
   id: string,
   ownerId: string,
-  patch: Partial<Pick<Automation, "name" | "prompt" | "schedule" | "timezone" | "chatId" | "modeId" | "modelId" | "extendedModelId" | "maxRunMinutes" | "graph">>,
+  patch: Partial<Pick<Automation, "name" | "prompt" | "schedule" | "timezone" | "chatId" | "modeId" | "modelId" | "extendedModelId" | "maxRunMinutes" | "graph" | "projectId">>,
 ) {
   const current = getAutomation(id, ownerId, false);
   if (!current) return null;
@@ -441,13 +454,17 @@ export function updateAutomation(
     maxRunMinutes,
   });
   const graph = patch.graph ? normalizeGraph(patch.graph, generatedGraph) : generatedGraph;
+    const projectId = patch.projectId !== undefined
+      ? resolvedProjectId(ownerId, patch.projectId) || null
+      : current.projectId || null;
   getDatabase().prepare(
-    `UPDATE automations SET chat_id = ?, name = ?, prompt = ?, mode_id = ?, model_id = ?, extended_model_id = ?,
+    `UPDATE automations SET chat_id = ?, project_id = ?, name = ?, prompt = ?, mode_id = ?, model_id = ?, extended_model_id = ?,
        max_run_minutes = ?, graph_json = ?, schedule_kind = ?, schedule_value = ?, timezone = ?, next_run_at = ?,
        status = CASE WHEN status IN ('completed', 'error') THEN 'active' ELSE status END,
        last_error = NULL, updated_at = ? WHERE id = ? AND owner_id = ?`,
   ).run(
     chat.id,
+    projectId,
     name,
     prompt,
     modeId,

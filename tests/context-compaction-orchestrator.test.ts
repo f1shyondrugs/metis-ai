@@ -178,7 +178,33 @@ test("Cursor SDK prompt compaction is a no-op below 80% of the window", () => {
 
 test("Cursor worker compacts before resume and emits a compaction chip", () => {
   assert.match(workerSource, /compactChatHistoryForPrompt\(chat,/);
-  assert.match(workerSource, /agent = \(job\.agentId \|\| chat\.agentId\) && !historyCompacted/);
+  assert.match(workerSource, /agent = \(job\.agentId \|\| chat\.agentId\) && !historyCompacted && !measuredPressure/);
   assert.match(workerSource, /emit\("compaction", event\)/);
   assert.match(workerSource, /compactedHistory\.text/);
 });
+
+test("measured provider usage forces compaction even when the transcript estimate is below 80%", () => {
+  const small: ModelMessage[] = [
+    { role: "user", content: "hello" },
+    { role: "assistant", content: "hi" },
+    { role: "user", content: "continue" },
+  ];
+  const events: Array<Record<string, unknown>> = [];
+  compactProviderMessages(small, 100_000, "normal", (event) => events.push(event), 9_500_000);
+  assert.equal(events.at(-1)?.status, "completed");
+});
+
+test("Cursor send includes native vision images and persists queued follow-ups server-side", () => {
+  const uploads = readFileSync(new URL("../lib/uploads.ts", import.meta.url), "utf8");
+  const worker = readFileSync(new URL("../worker.ts", import.meta.url), "utf8");
+  const shell = readFileSync(new URL("../components/app-shell.tsx", import.meta.url), "utf8");
+  assert.match(uploads, /export function visionImagesForAttachments/);
+  assert.match(workerSource, /visionImages\.length \? \{ text: prompt, images: visionImages \}/);
+  assert.match(worker, /queuedAttachments\.length \? "\(see attachments\)"/);
+  assert.match(worker, /drainPersistedChatQueues\(\);/);
+  assert.match(shell, /function persistQueuedFollowUps/);
+  assert.match(shell, /keepalive: true/);
+  assert.match(shell, /pagehide/);
+  assert.doesNotMatch(shell, /shouldAutoDrainQueue\(\{/);
+});
+

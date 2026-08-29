@@ -16,6 +16,7 @@ import {
   Pencil,
   Play,
   Plus,
+  Search,
   TimerReset,
   Trash2,
   UserRound,
@@ -28,6 +29,7 @@ import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { ConfirmDialog } from "@/components/confirm-dialog";
+import { NoteProjectMenu, type NoteProjectOption } from "@/components/note-project-menu";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -72,6 +74,7 @@ type Automation = {
   id: string;
   chatId: string;
   chatTitle?: string;
+  projectId?: string;
   name: string;
   prompt: string;
   creator?: "user" | "agent";
@@ -95,6 +98,7 @@ type Automation = {
 
 type AutomationsPanelProps = {
   activeChatId?: string | null;
+  activeProjectId?: string | null;
   onOpenChat: (chatId: string) => void;
   models: ModelInfo[];
   modes: AgentMode[];
@@ -249,7 +253,7 @@ function AutomationGraphView({ automation }: { automation: Automation }) {
   );
 }
 
-export function AutomationsPanel({ activeChatId, onOpenChat, models, modes, selectedModelId, highlightId }: AutomationsPanelProps) {
+export function AutomationsPanel({ activeChatId, activeProjectId, onOpenChat, models, modes, selectedModelId, highlightId }: AutomationsPanelProps) {
   const [automations, setAutomations] = useState<Automation[]>([]);
   const [detailAutomation, setDetailAutomation] = useState<Automation | null>(null);
   const [loading, setLoading] = useState(true);
@@ -271,6 +275,9 @@ export function AutomationsPanel({ activeChatId, onOpenChat, models, modes, sele
   const [modelId, setModelId] = useState(selectedModelId || "");
   const [extendedModelId, setExtendedModelId] = useState("");
   const [maxRunMinutes, setMaxRunMinutes] = useState("1440");
+  const [search, setSearch] = useState("");
+  const [projects, setProjects] = useState<NoteProjectOption[]>([]);
+  const [formProjectId, setFormProjectId] = useState<string | null>(activeProjectId || null);
 
   const load = async (silent = false) => {
     try {
@@ -302,6 +309,20 @@ export function AutomationsPanel({ activeChatId, onOpenChat, models, modes, sele
       if (!silent) setDetailLoading(false);
     }
   };
+
+  useEffect(() => {
+    const loadProjects = () => {
+      void fetch("/api/projects", { cache: "no-store" })
+        .then(async (response) => {
+          const body = (await response.json().catch(() => ({}))) as { projects?: NoteProjectOption[] };
+          if (response.ok) setProjects(body.projects || []);
+        })
+        .catch(() => undefined);
+    };
+    loadProjects();
+    window.addEventListener("metis:projects-changed", loadProjects);
+    return () => window.removeEventListener("metis:projects-changed", loadProjects);
+  }, []);
 
   useEffect(() => {
     void load();
@@ -361,6 +382,7 @@ export function AutomationsPanel({ activeChatId, onOpenChat, models, modes, sele
     setModelId(selectedModelId || models[0]?.id || "");
     setExtendedModelId("");
     setMaxRunMinutes("1440");
+    setFormProjectId(activeProjectId || null);
     setFormOpen(false);
   }
 
@@ -374,6 +396,7 @@ export function AutomationsPanel({ activeChatId, onOpenChat, models, modes, sele
     setModelId(automation.modelId || selectedModelId || models[0]?.id || "");
     setExtendedModelId(automation.extendedModelId || "");
     setMaxRunMinutes(String(automation.maxRunMinutes || 1440));
+    setFormProjectId(automation.projectId || null);
     if (automation.schedule.kind === "once") {
       setScheduleKind("once");
       setOnceAt(automation.schedule.at.slice(0, 16));
@@ -413,6 +436,7 @@ export function AutomationsPanel({ activeChatId, onOpenChat, models, modes, sele
           maxRunMinutes: Number(maxRunMinutes),
           schedule,
           timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+          projectId: formProjectId,
         }),
       });
       const data = (await response.json()) as { automation?: Automation; error?: string };
@@ -459,6 +483,19 @@ export function AutomationsPanel({ activeChatId, onOpenChat, models, modes, sele
     }
   }
 
+  const visibleAutomations = useMemo(() => {
+    const query = search.trim().toLocaleLowerCase();
+    const projectNameById = new Map(projects.map((project) => [project.id, project.name.toLocaleLowerCase()]));
+    return automations.filter((automation) => {
+      if (!query) return true;
+      if (automation.name.toLocaleLowerCase().includes(query)) return true;
+      if (automation.prompt.toLocaleLowerCase().includes(query)) return true;
+      if ((automation.chatTitle || "").toLocaleLowerCase().includes(query)) return true;
+      const projectName = automation.projectId ? projectNameById.get(automation.projectId) : undefined;
+      return Boolean(projectName?.includes(query));
+    });
+  }, [automations, projects, search]);
+
   const currentDetail = detailAutomation;
 
   return (
@@ -470,7 +507,13 @@ export function AutomationsPanel({ activeChatId, onOpenChat, models, modes, sele
             <span className="truncate">Automations</span>
           </button>
         ) : (
-          <span className="flex items-center gap-2 text-xs font-medium"><CalendarClock className="size-4 text-primary" />Automations</span>
+          <div className="flex min-w-0 flex-1 items-center gap-2">
+            <span className="hidden items-center gap-2 text-xs font-medium sm:flex"><CalendarClock className="size-4 text-primary" />Automations</span>
+            <div className="relative min-w-32 flex-1 sm:max-w-56">
+              <Search className="pointer-events-none absolute left-2 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground" />
+              <Input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search automations" className="h-7 pl-7 text-xs" />
+            </div>
+          </div>
         )}
         <Button type="button" size="icon-xs" variant="ghost" title="New automation" onClick={() => { resetForm(); setFormOpen(true); }}>
           <Plus className="size-4" />
@@ -482,6 +525,10 @@ export function AutomationsPanel({ activeChatId, onOpenChat, models, modes, sele
           <DialogHeader><DialogTitle>{editingId ? "Edit automation" : "New automation"}</DialogTitle></DialogHeader>
           <form onSubmit={saveAutomation} className="space-y-3">
             <Input value={name} onChange={(event) => setName(event.target.value)} placeholder="Automation name" required />
+          <div className="flex items-center justify-between gap-2">
+            <p className="text-[10px] font-medium text-muted-foreground">Project</p>
+            <NoteProjectMenu projectId={formProjectId} projects={projects} onChange={setFormProjectId} />
+          </div>
             <Textarea value={prompt} onChange={(event) => setPrompt(event.target.value)} placeholder="What should the agent do?" className="min-h-28" required />
             <div className="space-y-1">
               <p className="text-[10px] font-medium text-muted-foreground">Context chat</p>
@@ -570,6 +617,15 @@ export function AutomationsPanel({ activeChatId, onOpenChat, models, modes, sele
                 <div className="flex flex-wrap items-center gap-1.5">
                   <h3 className="truncate text-sm font-semibold">{currentDetail.name}</h3>
                   <span className={`text-[9px] font-medium ${statusTone(currentDetail.status)}`}>{currentDetail.status}</span>
+                  <NoteProjectMenu
+                    projectId={currentDetail.projectId}
+                    projects={projects}
+                    onChange={(nextProjectId) => {
+                      void action(currentDetail.id, "PATCH", { projectId: nextProjectId }).then(() => {
+                        setDetailAutomation((current) => current ? { ...current, projectId: nextProjectId || undefined } : current);
+                      });
+                    }}
+                  />
                 </div>
                 <p className="mt-0.5 text-[9px] text-muted-foreground">Created by {currentDetail.creator === "agent" ? "Agent" : "You"} · max run {runLimitText(currentDetail.maxRunMinutes)}</p>
               </div>
@@ -628,8 +684,8 @@ export function AutomationsPanel({ activeChatId, onOpenChat, models, modes, sele
             Short checks and multi-day agent jobs use the same durable runtime. Every run has its own chat, tools, MCPs and persistent browser session.
           </div>
           {loading ? <p className="p-3 text-xs text-muted-foreground">Loading automations…</p> : null}
-          {!loading && automations.length === 0 ? <p className="rounded-xl border border-dashed border-border/40 p-5 text-center text-xs text-muted-foreground">No automations yet.</p> : null}
-          {automations.map((automation) => {
+          {!loading && visibleAutomations.length === 0 ? <p className="rounded-xl border border-dashed border-border/40 p-5 text-center text-xs text-muted-foreground">{search.trim() ? "No automations match that search." : "No automations yet."}</p> : null}
+          {visibleAutomations.map((automation) => {
             const activeRun = automation.runs?.find((run) => run.status === "running" || run.status === "queued");
             const latestRun = automation.runs?.[0];
             return (
@@ -646,6 +702,15 @@ export function AutomationsPanel({ activeChatId, onOpenChat, models, modes, sele
                   <ChevronRight className="mt-1 size-3.5 shrink-0 text-muted-foreground" />
                 </button>
                 <div className="mt-2.5 flex flex-wrap items-center gap-x-2.5 gap-y-1 border-t border-border/25 pt-2 text-[8px] text-muted-foreground">
+                    <span onClick={(event) => event.stopPropagation()} onPointerDown={(event) => event.stopPropagation()}>
+                      <NoteProjectMenu
+                        projectId={automation.projectId}
+                        projects={projects}
+                        onChange={(nextProjectId) => {
+                          void action(automation.id, "PATCH", { projectId: nextProjectId });
+                        }}
+                      />
+                    </span>
                   <span className="inline-flex items-center gap-1"><Clock3 className="size-2.5" />{scheduleText(automation)}</span>
                   <span className="inline-flex items-center gap-1"><TimerReset className="size-2.5" />max {runLimitText(automation.maxRunMinutes)}</span>
                   <span>{automation.creator === "agent" ? "Agent" : "You"}</span>

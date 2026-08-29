@@ -53,6 +53,7 @@ export async function POST(req: Request) {
       maxRunMinutes: typeof body.maxRunMinutes === "number" ? body.maxRunMinutes : undefined,
       schedule: scheduleFromBody(body),
       timezone: typeof body.timezone === "string" ? body.timezone : undefined,
+          projectId: typeof body.projectId === "string" ? body.projectId : body.projectId === null ? null : undefined,
     });
     return Response.json({ automation }, { status: 201 });
   } catch (error) {

@@ -286,20 +286,23 @@ function reconcileJobLifecycle(jobId: string) {
  if (!job || !["completed", "error", "cancelled", "interrupted"].includes(job.status)) return;
  reconcileSubagentParent(job.id);
  if (job.parentJobId) reconcileSubagentParent(job.parentJobId);
+  drainPersistedChatQueues();
 }
 
 function enqueuePersistedChatFollowUp(chatId: string, userId?: string) {
   if (getActiveJob(chatId, userId)) return null;
   const chat = getChat(chatId, userId);
   const queued = chat?.queuedMessages?.[0];
-  if (!chat || !queued?.text.trim()) return null;
+  const queuedText = queued?.text.trim() || "";
+  const queuedAttachments = queued?.attachments || [];
+  if (!chat || !queued || (!queuedText && !queuedAttachments.length)) return null;
 
   let job;
   try {
     job = enqueueJob({
       chatId: chat.id,
       userId: chat.ownerId || userId,
-      message: queued.text.trim(),
+      message: queuedText || (queuedAttachments.length ? "(see attachments)" : ""),
       messageId: queued.id,
       ...(queued.referenceText ? { referenceText: queued.referenceText } : {}),
       ...(queued.references?.length
@@ -312,12 +315,14 @@ function enqueuePersistedChatFollowUp(chatId: string, userId?: string) {
       ...(chat.modelParams?.length ? { modelParams: chat.modelParams } : {}),
       ...(chat.sessionState?.modeId ? { modeId: chat.sessionState.modeId } : {}),
       ...(chat.incognito ? { incognito: true } : {}),
+      ...(queuedAttachments.length ? { attachments: queuedAttachments } : {}),
     }, {
       beforeInsert: () => {
         const appended = appendMessageInTransaction(chat.id, {
           id: queued.id,
           role: "user",
-          content: queued.text.trim(),
+          content: queuedText || (queuedAttachments.length ? `Attached ${queuedAttachments.length} file${queuedAttachments.length === 1 ? "" : "s"}` : ""),
+        ...(queuedAttachments.length ? { attachments: queuedAttachments } : {}),
           ...(queued.referenceText ? { referenceText: queued.referenceText } : {}),
           ...(queued.references?.length ? { references: queued.references } : {}),
         }, chat.ownerId || userId);

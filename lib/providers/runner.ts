@@ -22,7 +22,7 @@ import { getProject, projectContextBlock } from "@/lib/projects";
 import type { MessagePart } from "@/lib/store";
 import { skillsCatalogPrompt } from "@/lib/skills";
 import { getJob, appendRunEvent, updateJob } from "@/lib/db-jobs";
-import { buildAttachmentPrompt } from "@/lib/uploads";
+import { buildAttachmentPrompt, visionImagesForAttachments } from "@/lib/uploads";
 import { config } from "@/lib/config";
 import { mcpBridgeTools } from "@/lib/mcp-bridge";
 import { getUserAgentCwd, getMcpServers, buildMcpContext } from "@/lib/mcp";
@@ -58,6 +58,7 @@ import {
   estimateContextTokens,
   type ContextMode,
   contextWindowForSelection,
+  lastMeasuredInputTokens,
 } from "@/lib/context-window";
 import { logError } from "@/lib/error-logs";
 import { persistToolsForMessage } from "@/lib/tool-persistence";
@@ -318,9 +319,26 @@ function chatToModelMessages(chat: Chat, excludeMessageId?: string): ModelMessag
     if (message.role !== "user" && message.role !== "assistant") continue;
     const content = message.content.trim();
     const tools = message.tools || [];
-    if (!content && !tools.length) continue;
+    const images = message.role === "user" && message.attachments?.length
+      ? visionImagesForAttachments(chat.id, message.attachments, chat.ownerId)
+      : [];
+    if (!content && !tools.length && !images.length) continue;
     if (message.role === "user") {
-      messages.push({ role: "user", content: content || "respond." });
+      if (!images.length) {
+        messages.push({ role: "user", content: content || "respond." });
+      } else {
+        messages.push({
+          role: "user",
+          content: [
+            { type: "text", text: content || "See attached image(s)." },
+            ...images.map((image) => ({
+              type: "image" as const,
+              image: `data:${image.mimeType};base64,${image.data}`,
+              mediaType: image.mimeType,
+            })),
+          ],
+        });
+      }
       continue;
     }
     if (!tools.length) {
@@ -372,6 +390,7 @@ export function compactChatHistoryForPrompt(
     excludeMessageId?: string;
     contextWindow?: number;
     contextMode?: ContextMode;
+    measuredTokens?: number;
     onCompaction?: (event: CompactionEvent) => void;
     maxChars?: number;
   } = {},
@@ -386,6 +405,7 @@ export function compactChatHistoryForPrompt(
       if (event.status === "completed") compacted = true;
       options.onCompaction?.(event);
     },
+    options.measuredTokens,
   );
   let text = serializeModelMessagesForPrompt(next);
   const maxChars = options.maxChars ?? 120_000;
@@ -406,7 +426,7 @@ function modelMessages(
   if (!messages.some((message) => message.role === "user")) {
     messages.push({ role: "user", content: job.message || "respond." });
   }
-  return compactIfNeeded(messages, contextWindow, contextMode, onCompaction);
+  return compactIfNeeded(messages, contextWindow, contextMode, onCompaction, lastMeasuredInputTokens(chat));
 }
 
 function effectiveModelParams(chat: Chat, job: AgentJob) {
@@ -514,11 +534,13 @@ function compactIfNeeded(
   contextWindow?: number,
   contextMode: ContextMode = "normal",
   onCompaction?: (event: CompactionEvent) => void,
+  measuredTokens?: number,
 ): ModelMessage[] {
   if (!contextWindow || contextWindow <= 0 || messages.length < 2) return messages;
   const total = messages.reduce((sum, message) => sum + estimateContextTokens(message), 0);
   const budget = effectiveContextBudget(contextWindow, contextMode);
- if (total / contextWindow < CONTEXT_COMPACT_RATIO) return messages;
+  const pressureTokens = Math.max(total, Number(measuredTokens) > 0 ? Number(measuredTokens) : 0);
+  if (pressureTokens / contextWindow < CONTEXT_COMPACT_RATIO) return messages;
  // One compact per pressure wave. A recap is already canonical; compacting it
  // again would drop the tail and break idempotency on the next runner step.
  if (messages.some((message) => modelMessageText(message).includes(COMPACTION_MARKER))) {
@@ -615,8 +637,9 @@ export function compactProviderMessages(
   contextWindow: number,
   contextMode: ContextMode = "normal",
   onCompaction?: (event: CompactionEvent) => void,
+  measuredTokens?: number,
 ): ModelMessage[] {
-  return compactIfNeeded(messages, contextWindow, contextMode, onCompaction);
+  return compactIfNeeded(messages, contextWindow, contextMode, onCompaction, measuredTokens);
 }
 
 export function codexReasoningEffortForSelection(

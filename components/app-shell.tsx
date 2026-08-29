@@ -2637,11 +2637,12 @@ export default function AppShell({ defaultCwd }: { defaultCwd: string }) {
       agentId: s.agentId,
       modelId: s.modelId,
       modelParams: s.modelParams,
-      queuedMessages: s.queuedMessages.map(({ id, text, referenceText, references }) => ({
+      queuedMessages: s.queuedMessages.map(({ id, text, referenceText, references, storedAttachments }) => ({
         id,
         text,
         ...(referenceText ? { referenceText } : {}),
         ...(references?.length ? { references } : {}),
+          ...(storedAttachments?.length ? { attachments: storedAttachments } : {}),
       })),
       workspaces: s.workspaces,
       browserContext: normalizeBrowserContext(
@@ -2672,11 +2673,12 @@ export default function AppShell({ defaultCwd }: { defaultCwd: string }) {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        queuedMessages: s.queuedMessages.map(({ id: messageId, text, referenceText, references }) => ({
+        queuedMessages: s.queuedMessages.map(({ id: messageId, text, referenceText, references, storedAttachments }) => ({
           id: messageId,
           text,
           ...(referenceText ? { referenceText } : {}),
           ...(references?.length ? { references } : {}),
+          ...(storedAttachments?.length ? { attachments: storedAttachments } : {}),
         })),
         browserContext: {
           tabs: s.browserTabs,
@@ -4856,11 +4858,12 @@ export default function AppShell({ defaultCwd }: { defaultCwd: string }) {
       agentId,
       modelId,
       modelParams,
-      queuedMessages: queuedMessages.map(({ id, text, referenceText, references }) => ({
+      queuedMessages: queuedMessages.map(({ id, text, referenceText, references, storedAttachments }) => ({
         id,
         text,
         ...(referenceText ? { referenceText } : {}),
         ...(references?.length ? { references } : {}),
+          ...(storedAttachments?.length ? { attachments: storedAttachments } : {}),
       })),
       workspaces,
       browserContext: normalizeBrowserContext(
@@ -4953,11 +4956,12 @@ export default function AppShell({ defaultCwd }: { defaultCwd: string }) {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          queuedMessages: queuedMessages.map(({ id, text, referenceText, references }) => ({
+          queuedMessages: queuedMessages.map(({ id, text, referenceText, references, storedAttachments }) => ({
             id,
             text,
             ...(referenceText ? { referenceText } : {}),
             ...(references?.length ? { references } : {}),
+          ...(storedAttachments?.length ? { attachments: storedAttachments } : {}),
           })),
         }),
       });
@@ -5222,11 +5226,12 @@ export default function AppShell({ defaultCwd }: { defaultCwd: string }) {
         agentId: undefined,
         modelId: stateRef.current.modelId,
         modelParams: stateRef.current.modelParams,
-        queuedMessages: stateRef.current.queuedMessages.map(({ id, text, referenceText, references }) => ({
+        queuedMessages: stateRef.current.queuedMessages.map(({ id, text, referenceText, references, storedAttachments }) => ({
           id,
           text,
           ...(referenceText ? { referenceText } : {}),
           ...(references?.length ? { references } : {}),
+          ...(storedAttachments?.length ? { attachments: storedAttachments } : {}),
         })),
         workspaces: [],
         browserContext: normalizeBrowserContext(data.chat.browserContext, data.chat.id),
@@ -5828,10 +5833,29 @@ export default function AppShell({ defaultCwd }: { defaultCwd: string }) {
     ));
   }
 
+  function persistQueuedFollowUps(items: QueuedMessage[]) {
+    const chatId = activeChatIdRef.current;
+    if (!chatId) return;
+    void fetch(`/api/chats/${chatId}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        queuedMessages: items.map(({ id, text, referenceText, references, storedAttachments }) => ({
+          id,
+          text,
+          ...(referenceText ? { referenceText } : {}),
+          ...(references?.length ? { references } : {}),
+          ...(storedAttachments?.length ? { attachments: storedAttachments } : {}),
+        })),
+      }),
+      keepalive: true,
+    });
+  }
+
   function queueCurrentMessage(text: string, files: PendingFile[]) {
     setQueuedMessages((current) => {
       if (text && current.some((item) => item.text === text)) return current;
-      return [
+      const next = [
       ...current,
       {
         id: `q-${Date.now()}-${Math.random().toString(36).slice(2)}`,
@@ -5842,6 +5866,8 @@ export default function AppShell({ defaultCwd }: { defaultCwd: string }) {
         ...(restoredAttachments.length ? { storedAttachments: [...restoredAttachments] } : {}),
       },
     ];
+      persistQueuedFollowUps(next);
+      return next;
     });
     setInputGuarded("", "queued");
     setReferenceText("");
@@ -7018,40 +7044,22 @@ export default function AppShell({ defaultCwd }: { defaultCwd: string }) {
   }
 
   useEffect(() => {
-    if (
-      !shouldAutoDrainQueue({
-        busy,
-        sendInFlight: sendInFlightKeysRef.current.has(activeChatIdRef.current || "__draft__"),
-        waitingForQuestion: Boolean(pendingQuestion),
-        drainBlocked: queueDrainBlockedRef.current,
-        drainInProgress: queueDrainRef.current,
-        queueLength: queuedMessages.length,
-        hasActiveRuntime: Boolean(activeChatIdRef.current && runtimeRef.current.has(activeChatIdRef.current)),
-      })
-    ) {
-      return;
-    }
-    const next = queuedMessages[0];
-    if (!next) return;
-    if (queuedSendRef.current.has(next.id)) return;
-    queuedSendRef.current.add(next.id);
-    queueDrainRef.current = true;
-    void send(
-      undefined,
-      next.text,
-      next.files,
-      true,
-      next.referenceText,
-      next.references,
-      next.id,
-      () => setQueuedMessages((current) => current.filter((item) => item.id !== next.id)),
-      next.storedAttachments,
-    ).finally(() => {
-      queuedSendRef.current.delete(next.id);
-      queueDrainRef.current = false;
-      setSendLockTick((value) => value + 1);
-    });
-  }, [busy, pendingQuestion, queuedMessages, sendLockTick]);
+    if (!activeChatIdRef.current || !queuedMessages.length) return;
+    persistQueuedFollowUps(queuedMessages);
+  }, [queuedMessages]);
+
+  useEffect(() => {
+    const flush = () => persistQueuedFollowUps(queuedMessages);
+    const onHide = () => {
+      if (document.visibilityState === "hidden") flush();
+    };
+    window.addEventListener("pagehide", flush);
+    document.addEventListener("visibilitychange", onHide);
+    return () => {
+      window.removeEventListener("pagehide", flush);
+      document.removeEventListener("visibilitychange", onHide);
+    };
+  }, [queuedMessages]);
 
   const normalizedModelSearch = modelSearch.trim().toLowerCase();
   const availableProviderIds = new Set([
@@ -8199,6 +8207,9 @@ export default function AppShell({ defaultCwd }: { defaultCwd: string }) {
  setDraftProjectId(projectId);
  navigateChat(null);
  setMobileNavOpen(false);
+    if (typeof window !== "undefined" && window.innerWidth < 768) {
+      setDesktopSidebarOpen(false);
+    }
  }
 
  const sidebar = (mobile = false) => (
@@ -8481,6 +8492,7 @@ export default function AppShell({ defaultCwd }: { defaultCwd: string }) {
                if (wasOnHub) openDraft({ projectId: null });
               }}
               onMoveChat={(chatId, projectId) => void moveChatToProject(chatId, projectId)}
+        onCollapseNav={() => setMobileNavOpen(false)}
             />
           )}
         </div>
@@ -8831,6 +8843,7 @@ export default function AppShell({ defaultCwd }: { defaultCwd: string }) {
           <div className="h-full min-h-0 flex-1 p-3 sm:p-5">
             <AutomationsPanel
               activeChatId={activeChatId}
+                activeProjectId={activeProjectId}
               models={models}
               modes={modes}
               selectedModelId={modelId}

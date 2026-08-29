@@ -30,12 +30,12 @@ function decodeBase64(data: string) {
  return Buffer.from(String(data || "").replace(/^data:[^;]+;base64,/, "").replace(/\s/g, ""), "base64");
 }
 
-function persistAsset(projectId: string, fileName: string, data: string, ownerId?: string) {
+function persistAsset(projectId: string, fileName: string, data: string | Buffer, ownerId?: string) {
  const dir = projectAssetsDir(projectId, ownerId);
  mkdirSync(dir, { recursive: true });
  const storedName = sanitizeFileName(fileName);
  if (!storedName || storedName.includes("..")) throw new Error("Invalid file name");
- writeFileSync(path.join(dir, storedName), decodeBase64(data));
+ writeFileSync(path.join(dir, storedName), Buffer.isBuffer(data) ? data : decodeBase64(data));
  return storedName;
 }
 
@@ -204,6 +204,7 @@ export function deleteProject(id: string, ownerId?: string) {
   const db = getDatabase();
   db.prepare("DELETE FROM project_files WHERE project_id = ?").run(id);
   db.prepare("DELETE FROM projects WHERE id = ?").run(id);
+    db.prepare("UPDATE automations SET project_id = NULL WHERE project_id = ?").run(id);
   rmSync(projectAssetsDir(id, ownerId), { recursive: true, force: true });
   const chatIds = listChatsForUser(ownerId, { includeArchived: true })
    .filter((chat) => chat.projectId === id)
@@ -250,26 +251,27 @@ export function addProjectFile(input: {
  mimeType?: string;
  text?: string;
  data?: string;
+ bytes?: Buffer | Uint8Array;
 }): ProjectFile | null {
  if (!getProject(input.projectId, input.ownerId)) return null;
  const timestamp = iso();
  const name = sanitizeFileName(clip(input.name, 200) || "file");
- const mimeType = clip(input.mimeType, 120) || (input.data ? "application/octet-stream" : "text/plain");
+ const rawBytes = input.bytes ? Buffer.from(input.bytes) : input.data ? decodeBase64(input.data) : null;
+ const mimeType = clip(input.mimeType, 120) || (rawBytes ? "application/octet-stream" : "text/plain");
  let storedName: string | undefined;
  let text = clip(input.text, 200_000);
  let size = text.length;
 
- if (input.data) {
-  const bytes = decodeBase64Size(input.data);
-  if (bytes <= 0) throw new Error("Empty file");
-  if (bytes > MAX_PROJECT_FILE_BYTES) {
+ if (rawBytes) {
+  if (rawBytes.length <= 0) throw new Error("Empty file");
+  if (rawBytes.length > MAX_PROJECT_FILE_BYTES) {
    throw new Error(`File too large (max ${MAX_PROJECT_FILE_BYTES / 1024 / 1024}MB): ${name}`);
   }
-  storedName = persistAsset(input.projectId, `${randomUUID().slice(0, 8)}-${name}`, input.data, input.ownerId);
-  size = bytes;
+  storedName = persistAsset(input.projectId, `${randomUUID().slice(0, 8)}-${name}`, rawBytes, input.ownerId);
+  size = rawBytes.length;
   if (!text && isTextAttachment({ mimeType, name })) {
    try {
-    text = clip(decodeBase64(input.data).toString("utf8"), 200_000);
+    text = clip(rawBytes.toString("utf8"), 200_000);
    } catch {
     text = "";
    }

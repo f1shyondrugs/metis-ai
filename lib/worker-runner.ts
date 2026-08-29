@@ -18,7 +18,7 @@ import { appendRunEvent, enqueueJob, getJob, touchJob, updateJob } from "@/lib/d
 import { canonicalizeToolPart } from "@/lib/providers/tool-events";
 import { logError } from "@/lib/error-logs";
 import { isModelAllowed } from "@/lib/model-access";
-import { buildAttachmentPrompt } from "@/lib/uploads";
+import { buildAttachmentPrompt, visionImagesForAttachments } from "@/lib/uploads";
 import type { AgentJob } from "@/lib/jobs";
 import {
   findActiveConnection,
@@ -30,7 +30,7 @@ import { routeModel, type RoutingModel } from "@/lib/model-routing";
 import { routeTask } from "@/lib/agent-efficiency";
 import type { Chat } from "@/lib/store";
 import { compactChatHistoryForPrompt, runAlternativeProviderJob } from "@/lib/providers/runner";
-import { contextModeOf, contextWindowForSelection } from "@/lib/context-window";
+import { CONTEXT_COMPACT_RATIO, contextModeOf, contextWindowForSelection, lastMeasuredInputTokens } from "@/lib/context-window";
 import { appendAgentTrace } from "@/lib/agent-trace";
 import { parseAgentTranscript, stripTranscriptDump } from "@/lib/agent-transcript";
 import { snapshotInterruptedJob } from "@/lib/recovery";
@@ -819,6 +819,7 @@ export async function runQueuedJob(job: AgentJob) {
             modelParams,
           ),
           contextMode: contextModeOf(modelParams),
+          measuredTokens: lastMeasuredInputTokens(chat),
           onCompaction: (event) => {
             historyCompacted = historyCompacted || event.status === "completed";
             const part: MessagePart = { ...event };
@@ -830,10 +831,20 @@ export async function runQueuedJob(job: AgentJob) {
           },
         });
     historyCompacted = historyCompacted || compactedHistory.compacted;
-    if (historyCompacted) {
+    const selectedWindow = contextWindowForSelection(
+      { id: requestedModelId, providerId: "cursor" },
+      modelParams,
+    );
+    const measuredTokens = lastMeasuredInputTokens(chat);
+    const measuredPressure = Boolean(
+      selectedWindow &&
+      measuredTokens &&
+      measuredTokens / selectedWindow >= CONTEXT_COMPACT_RATIO,
+    );
+    if (historyCompacted || measuredPressure) {
       updateChat(job.chatId, { agentId: null }, job.userId);
     }
-    agent = (job.agentId || chat.agentId) && !historyCompacted
+    agent = (job.agentId || chat.agentId) && !historyCompacted && !measuredPressure
       ? await (async () => {
           try {
             return await withTimeout(Agent.resume(job.agentId || chat.agentId!, {
@@ -1276,8 +1287,12 @@ export async function runQueuedJob(job: AgentJob) {
       }
     }, 250);
     const startAgentRun = async () => {
+      const visionImages = visionImagesForAttachments(job.chatId, job.attachments || [], job.userId).map((image) => ({
+        data: image.data,
+        mimeType: image.mimeType,
+      }));
       return await Promise.race([
-        agent!.send(prompt, {
+        agent!.send(visionImages.length ? { text: prompt, images: visionImages } : prompt, {
           mcpServers: getMcpServers(mcpContext),
           onDelta: ({ update }) => {
             handleDelta(update as {

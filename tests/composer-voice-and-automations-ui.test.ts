@@ -65,3 +65,12 @@ test("agent completion uses the bundled default sound unless a custom sound is s
     "default completion sound must be shipped",
   );
 });
+
+test("automations can be searched by project name like notes", () => {
+  const notesSource = readFileSync(new URL("../components/notes-void.tsx", import.meta.url), "utf8");
+  assert.match(notesSource, /projectName\?\.includes\(query\)/);
+  assert.match(automationsSource, /placeholder=\"Search automations\"/);
+  assert.match(automationsSource, /projectName\?\.includes\(query\)/);
+  assert.match(automationsSource, /NoteProjectMenu/);
+  assert.match(automationsSource, /projectId: formProjectId/);
+});

@@ -285,3 +285,14 @@ export function formatContextWindow(tokens: number | undefined | null): string {
   }
   return String(Math.round(snapped));
 }
+
+export function lastMeasuredInputTokens(
+  chat: { messages?: Array<{ runMetadata?: { inputTokens?: number } }> } | null | undefined,
+): number | undefined {
+  const messages = chat?.messages || [];
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const tokens = messages[index]?.runMetadata?.inputTokens;
+    if (typeof tokens === "number" && Number.isFinite(tokens) && tokens > 0) return tokens;
+  }
+  return undefined;
+}

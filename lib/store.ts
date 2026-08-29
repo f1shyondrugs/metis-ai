@@ -409,6 +409,7 @@ export type Chat = {
     text: string;
     referenceText?: string;
     references?: ChatMessage["references"];
+    attachments?: ChatMessage["attachments"];
   }>;
   canvas?: string;
   workspaces?: WorkspaceItem[];
@@ -667,6 +668,7 @@ export function updateChat(
       text: string;
       referenceText?: string;
       references?: ChatMessage["references"];
+    attachments?: ChatMessage["attachments"];
     }> | null;
     canvas?: string | null;
     workspaces?: WorkspaceItem[] | null;

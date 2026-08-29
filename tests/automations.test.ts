@@ -63,6 +63,7 @@ test("automation runs are isolated, durable, tool-capable jobs with long runtime
   });
 
   assert.equal(automation.modeId, "agent");
+  assert.equal(automation.projectId, undefined);
   assert.equal(automation.maxRunMinutes, 4320);
   assert.deepEqual(automation.graph.nodes.map((node) => node.kind), ["trigger", "agent", "tools"]);
   assert.equal(automation.graph.nodes.at(-1)?.config?.browser, true);

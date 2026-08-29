@@ -75,6 +75,7 @@ export async function PATCH(req: Request, { params }: Params) {
           ...(typeof body.maxRunMinutes === "number" ? { maxRunMinutes: body.maxRunMinutes } : {}),
           ...(typeof body.chatId === "string" ? { chatId: body.chatId } : {}),
           ...(typeof body.timezone === "string" ? { timezone: body.timezone } : {}),
+        ...(body.projectId === null || typeof body.projectId === "string" ? { projectId: body.projectId as string | null } : {}),
           ...(scheduleFromBody(body) ? { schedule: scheduleFromBody(body) } : {}),
         });
     return automation

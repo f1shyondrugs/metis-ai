@@ -43,6 +43,7 @@ export function ProjectNav({
  onOpenProject,
  onClearProject,
  onMoveChat,
+ onCollapseNav,
 }: {
  chats: SidebarChat[];
  activeChatId?: string | null;
@@ -53,6 +54,7 @@ export function ProjectNav({
  onOpenProject: (projectId: string) => void;
  onClearProject: () => void;
  onMoveChat: (chatId: string, projectId: string | null) => void;
+ onCollapseNav?: () => void;
 }) {
  const [projects, setProjects] = useState<SidebarProject[]>([]);
  const [createOpen, setCreateOpen] = useState(false);
@@ -80,7 +82,7 @@ export function ProjectNav({
  const visibleChats = useMemo(() => {
   return chats.filter((chat) => {
    if (chat.archived) return false;
-   if (!activeProjectId) return true;
+   if (!activeProjectId) return !chat.projectId;
    return chat.projectId === activeProjectId;
   });
  }, [chats, activeProjectId]);
@@ -98,7 +100,12 @@ export function ProjectNav({
   load();
   window.dispatchEvent(new Event("metis:projects-changed"));
   onOpenProject(body.project.id);
+ onCollapseNav?.();
  }
+
+  function openCreate() {
+    setCreateOpen(true);
+  }
 
  function droppable(projectId: string | null, children: ReactNode, key?: string) {
   return (
@@ -124,7 +131,7 @@ export function ProjectNav({
   <div className="space-y-3">
    <div className="flex items-center justify-between px-2.5">
     <p className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground/70">Projects</p>
-    <Button type="button" variant="ghost" size="icon-sm" className="size-6" aria-label="New project" onClick={() => setCreateOpen(true)}>
+    <Button type="button" variant="ghost" size="icon-sm" className="size-6" aria-label="New project" onClick={openCreate}>
      <FolderPlus className="size-3.5" />
     </Button>
    </div>
@@ -212,7 +219,7 @@ export function ProjectNav({
      )}
     </div>,
    )}
-   <Dialog open={createOpen} onOpenChange={setCreateOpen}>
+   <Dialog open={createOpen} onOpenChange={(open) => { setCreateOpen(open); if (!open) onCollapseNav?.(); }}>
     <DialogContent className="sm:max-w-md">
      <DialogHeader>
       <DialogTitle>New project</DialogTitle>
@@ -259,7 +266,7 @@ export function ProjectNav({
       </div>
      </div>
      <DialogFooter>
-      <Button type="button" variant="outline" onClick={() => setCreateOpen(false)}>Cancel</Button>
+      <Button type="button" variant="outline" onClick={() => { setCreateOpen(false); onCollapseNav?.(); }}>Cancel</Button>
       <Button type="button" onClick={() => void create()}>Create</Button>
      </DialogFooter>
     </DialogContent>

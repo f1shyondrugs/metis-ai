@@ -518,7 +518,8 @@ export function updateChat(
       text: string;
       referenceText?: string;
       references?: ChatMessage["references"];
-    }> | null;
+        attachments?: ChatMessage["attachments"];
+      }> | null;
     pinned?: boolean;
     archived?: boolean;
     canvas?: string | null;
@@ -581,8 +582,24 @@ export function updateChat(
                   })),
               }
             : {}),
+        
+          ...(Array.isArray(item.attachments)
+            ? {
+                attachments: item.attachments
+                  .filter((attachment) => attachment && typeof attachment.id === "string" && typeof attachment.storedName === "string")
+                  .slice(0, 10)
+                  .map((attachment) => ({
+                    id: String(attachment.id).slice(0, 200),
+                    name: String(attachment.name || "file").slice(0, 200),
+                    mimeType: String(attachment.mimeType || "application/octet-stream").slice(0, 120),
+                    kind: attachment.kind === "image" ? "image" as const : "file" as const,
+                    storedName: String(attachment.storedName).slice(0, 200),
+                    size: Math.max(0, Math.floor(Number(attachment.size) || 0)),
+                  })),
+              }
+            : {}),
         }))
-        .filter((item) => item.text.trim())
+        .filter((item) => item.text.trim() || (Array.isArray(item.attachments) && item.attachments.length))
         .slice(0, 50);
       if (queued.length) next.queuedMessages = queued;
       else delete next.queuedMessages;
