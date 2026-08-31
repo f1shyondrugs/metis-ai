@@ -49,7 +49,7 @@ export async function GET(req: Request) {
     includeArchived: url.searchParams.get("includeArchived") === "true",
     search,
     projectId: url.searchParams.get("projectId")?.trim() || undefined,
-  });
+  }).filter((note) => note.kind !== "learned_fact");
   if (search) {
     const matchingIds = new Set(searchProjects(search, userId).map((project) => project.id));
     if (matchingIds.size) {
@@ -58,7 +58,7 @@ export async function GET(req: Request) {
         chatId,
         workspaceId,
         includeArchived: url.searchParams.get("includeArchived") === "true",
-      }).filter((note) => note.projectId && matchingIds.has(note.projectId));
+      }).filter((note) => note.kind !== "learned_fact" && note.projectId && matchingIds.has(note.projectId));
       const seen = new Set(notes.map((note) => note.id));
       notes = [...notes, ...extra.filter((note) => !seen.has(note.id))];
     }

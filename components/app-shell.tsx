@@ -75,6 +75,7 @@ import {
   StickyNote,
   Terminal,
   Trash2,
+  CornerUpLeft,
   Undo2,
   Video,
   X,
@@ -3588,13 +3589,15 @@ export default function AppShell({ defaultCwd }: { defaultCwd: string }) {
       (savedModel && data.models.some((m) => m.id === savedModel)
         ? savedModel
         : null) ||
-      data.defaultModelId ||
       data.models[0]?.id ||
       "";
 
-    const firstAvailableModelId = data.defaultModelId || data.models[0]?.id || "";
+    const firstAvailableModelId = data.models[0]?.id || "";
     setDefaultModelId((current) => current || firstAvailableModelId);
-    if (!activeChatIdRef.current) setModelId(nextModelId);
+    if (!activeChatIdRef.current) {
+      setModelId(nextModelId);
+      if (nextModelId) localStorage.setItem(MODEL_STORAGE_KEY, nextModelId);
+    }
     const meta = data.models.find((m) => m.id === nextModelId);
     let savedParams: ModelParamSelection[] | null = null;
     try {
@@ -3656,13 +3659,8 @@ export default function AppShell({ defaultCwd }: { defaultCwd: string }) {
         const settings = data.settings;
         const paramsByModel = settings.modelParamsByModel || {};
         setModelParamsByModel(paramsByModel);
-        const nextId = settings.modelId && models.some((model) => model.id === settings.modelId)
-          ? settings.modelId
-          : null;
-        if (nextId) {
-          setDefaultModelId(nextId);
-          if (!activeChatIdRef.current) setModelId(nextId);
-        }
+        // The server's legacy modelId is no longer a New Chat default. Keep the
+        // locally persisted latest selection authoritative instead.
         const rememberedByProvider = Object.fromEntries(
           Object.entries(settings.lastModelByProvider || {}).filter(([providerId, rememberedModelId]) => {
             if (!providerId || !rememberedModelId) return false;
@@ -3670,21 +3668,10 @@ export default function AppShell({ defaultCwd }: { defaultCwd: string }) {
             return parsed.providerKey === providerId;
           }),
         );
-        if (nextId) {
-          const providerId = parseModelKey(nextId).providerKey;
-          rememberedByProvider[providerId] ||= nextId;
-        }
         setLastModelByProvider((current) => ({
           ...rememberedByProvider,
           ...current,
         }));
-        const defaultParams = nextId && Object.prototype.hasOwnProperty.call(paramsByModel, nextId)
-          ? paramsByModel[nextId] || []
-          : settings.modelParams || [];
-        if (defaultParams.length || settings.modelParams || nextId) {
-          setDefaultModelParams(defaultParams);
-          if (!activeChatIdRef.current) setModelParams(defaultParams);
-        }
         setSubagentModelEnabled(Boolean(settings.subagentModelEnabled));
         if (settings.subagentModelId && models.some((model) => model.id === settings.subagentModelId)) {
           setSubagentModelId(settings.subagentModelId);
@@ -4054,8 +4041,26 @@ export default function AppShell({ defaultCwd }: { defaultCwd: string }) {
       setChatTitle("New chat");
       setModeId("agent");
       setAgentId(undefined);
-      setModelId(stateRef.current.defaultModelId || "");
-      setModelParams(stateRef.current.defaultModelParams);
+      const lastEquippedModelId =
+        typeof window !== "undefined" ? localStorage.getItem(MODEL_STORAGE_KEY) : null;
+      const nextNewChatModelId =
+        (lastEquippedModelId && models.some((model) => model.id === lastEquippedModelId)
+          ? lastEquippedModelId
+          : null) ||
+        stateRef.current.modelId ||
+        models[0]?.id ||
+        "";
+      const nextNewChatParams =
+        stateRef.current.modelId === nextNewChatModelId && stateRef.current.modelParams.length
+          ? stateRef.current.modelParams
+          : rememberedParamsForModel(nextNewChatModelId);
+      if (nextNewChatModelId && nextNewChatParams.length) {
+        const nextParamMap = { ...modelParamsByModel, [nextNewChatModelId]: nextNewChatParams };
+        persistModelParamsByModel(nextParamMap);
+        localStorage.setItem(PARAMS_STORAGE_KEY, JSON.stringify(nextNewChatParams));
+      }
+      setModelId(nextNewChatModelId);
+      setModelParams(nextNewChatParams);
       const browser = normalizeBrowserContext(
         previousChatId
           ? {
@@ -4530,9 +4535,18 @@ export default function AppShell({ defaultCwd }: { defaultCwd: string }) {
     id: string,
     fallback: ModelParamSelection[] = models.find((model) => model.id === id)?.defaultParams ?? [],
   ) {
-    return Object.prototype.hasOwnProperty.call(modelParamsByModel, id)
-      ? modelParamsByModel[id] || []
-      : fallback;
+    if (Object.prototype.hasOwnProperty.call(modelParamsByModel, id)) {
+      return modelParamsByModel[id] || [];
+    }
+    if (typeof window !== "undefined" && localStorage.getItem(MODEL_STORAGE_KEY) === id) {
+      try {
+        const saved = JSON.parse(localStorage.getItem(PARAMS_STORAGE_KEY) || "null");
+        if (Array.isArray(saved)) return saved as ModelParamSelection[];
+      } catch {
+        // Fall back to the model's declared defaults if local storage is malformed.
+      }
+    }
+    return fallback;
   }
 
   function updateDefaultModel(nextId: string) {
@@ -4679,10 +4693,10 @@ export default function AppShell({ defaultCwd }: { defaultCwd: string }) {
       if (current !== routeChatId) {
         void loadChat(routeChatId, { skipNav: true });
       }
-    } else if (current && !activeChatIncognito) {
+    } else if (current && !activeChatIncognito && !notesOpen && !automationsOpen) {
       openDraft({ skipNav: true });
     }
-  }, [activeChatIncognito, authed, routeChatId, routeView, loadChat, openDraft]);
+  }, [activeChatIncognito, authed, automationsOpen, loadChat, notesOpen, openDraft, routeChatId, routeView]);
 
   useEffect(() => {
     if (!authed || !activeChatId || loadingChatId) {
@@ -5847,6 +5861,25 @@ export default function AppShell({ defaultCwd }: { defaultCwd: string }) {
     );
   }
 
+  async function attachProjectFileToNextChat(
+    projectId: string,
+    file: { id: string; name: string; mimeType: string },
+  ) {
+    try {
+      openDraft({ projectId });
+      const response = await fetch(
+        `/api/projects/${encodeURIComponent(projectId)}/files/${encodeURIComponent(file.id)}`,
+        { credentials: "same-origin" },
+      );
+      if (!response.ok) throw new Error(`Could not load ${file.name}.`);
+      const blob = await response.blob();
+      addPendingFiles([new File([blob], file.name, { type: file.mimeType })]);
+      toast.success(`${file.name} attached to the next chat`);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : `Could not attach ${file.name}.`);
+    }
+  }
+
   function addPendingFiles(files: FileList | File[]) {
     const list = Array.from(files).filter((f) => f.size > 0);
     if (!list.length) return;
@@ -6578,14 +6611,16 @@ export default function AppShell({ defaultCwd }: { defaultCwd: string }) {
         const err = await res.json().catch(() => ({ error: res.statusText }));
         const msg =
           (err as { error?: string }).error || `HTTP ${res.status}`;
-        setMessages((m) =>
-          m.map((x) =>
-            x.id === asstId
-              ? { ...x, content: "", errorMessage: msg, streaming: false }
-              : x,
-          ),
-        );
-        if (activeChatIdRef.current === chatId) setBusySynced(false);
+        if (activeChatIdRef.current === chatId) {
+          setMessages((m) =>
+            m.map((x) =>
+              x.id === asstId
+                ? { ...x, content: "", errorMessage: msg, streaming: false }
+                : x,
+            ),
+          );
+          setBusySynced(false);
+        }
         return;
       }
 
@@ -6686,7 +6721,8 @@ export default function AppShell({ defaultCwd }: { defaultCwd: string }) {
           }
           if (eventId > lastEventId) lastEventId = eventId;
           const sequence = typeof payload.sequence === "number" ? payload.sequence : eventId;
-          if (sequence > 0 && runtimeRef.current.get(chatId)?.generation === generation) {
+          const isActiveChat = activeChatIdRef.current === chatId;
+          if (sequence > 0 && isActiveChat && runtimeRef.current.get(chatId)?.generation === generation) {
             setMessages((messages) =>
               messages.map((message) =>
                 message.id === asstId && (message.serverSequence || 0) < sequence
@@ -6699,11 +6735,15 @@ export default function AppShell({ defaultCwd }: { defaultCwd: string }) {
           if (runtimeRef.current.get(chatId)?.generation !== generation) continue;
 
           if (
-            chatId !== activeChatIdRef.current ||
+            !isActiveChat ||
             (typeof document !== "undefined" && document.hidden)
           ) {
             markUnread(chatId);
           }
+          // The server remains the source of truth for background chats, but
+          // their stream must never mutate the message list currently shown.
+          // Questions still pass through so the user gets an attention badge.
+          if (!isActiveChat && event !== "question") continue;
 
           if (event === "assistantId" && typeof payload.messageId === "string") {
             const serverMessageId = payload.messageId;
@@ -7372,8 +7412,9 @@ export default function AppShell({ defaultCwd }: { defaultCwd: string }) {
     ?? latestUsage?.totalProcessedTokens
     ?? latestUsage?.inputTokens
     ?? estimatedContextTokens;
+  const selectedContextWindow = contextWindowForSelection(selectedModel, modelParams);
   const contextTotal = resolveContextTotal(
-    latestUsage?.contextWindow ?? selectedModel.contextWindow ?? contextWindowForSelection(selectedModel, modelParams),
+    selectedContextWindow ?? latestUsage?.contextWindow,
     contextUsed,
   );
   const contextEstimated = latestUsage?.contextUsedTokens === undefined
@@ -9276,13 +9317,14 @@ export default function AppShell({ defaultCwd }: { defaultCwd: string }) {
           key={paneKey}
           className="relative flex min-h-0 flex-1 flex-col"
         >
-        {!notesOpen && !automationsOpen && activeChatId ? <NotesVoid chatId={activeChatId} pinnedOnly compact projectId={chats.find((chat) => chat.id === activeChatId)?.projectId || draftProjectId} /> : null}
+        {!notesOpen && !automationsOpen && !projectHomeId && activeChatId ? <NotesVoid chatId={activeChatId} pinnedOnly compact projectId={chats.find((chat) => chat.id === activeChatId)?.projectId || draftProjectId} /> : null}
         {projectHomeId && !notesOpen && !automationsOpen ? (
           <ProjectHome
             key={projectHomeId}
             projectId={projectHomeId}
             onOpenChat={(chatId) => void loadChat(chatId)}
             onNewChat={(projectId) => openDraft({ projectId })}
+            onAttachFile={(file) => void attachProjectFileToNextChat(projectHomeId, file)}
             onOpenNotes={(noteId) => {
               setNotesOpen(true);
               setFocusedNoteId(noteId ?? null);
@@ -9321,19 +9363,15 @@ export default function AppShell({ defaultCwd }: { defaultCwd: string }) {
           >
             <h2 className={cn(
               "text-center text-[28px] font-semibold leading-tight tracking-[-0.035em] text-foreground/95 sm:text-3xl",
-              incognito ? "mb-4" : "mb-5 sm:mb-2.5",
+              incognito ? "mb-8" : "mb-5",
             )}>
               {greeting}
             </h2>
-            {!incognito ? (
-              <p className="mb-6 hidden text-center text-sm font-normal text-muted-foreground/70 sm:block sm:text-base">
-                How can I help you today?
-              </p>
-            ) : (
+            {incognito ? (
               <p className="mb-8 max-w-md animate-in fade-in slide-in-from-top-1 text-center text-sm leading-relaxed text-muted-foreground duration-500">
                 Incognito mode is active. This chat is temporary and won&apos;t use or save your personal context.
               </p>
-            )}
+            ) : null}
             <div
               ref={composerContainerRef}
               className={cn(
@@ -9403,7 +9441,7 @@ export default function AppShell({ defaultCwd }: { defaultCwd: string }) {
                     key={m.id}
                     data-message-id={m.id}
                     className={cn(
-                      "w-full rounded-xl transition-colors",
+                      "w-full transition-colors",
                       highlightedMessageId === m.id && [
                         "-mx-2 -my-1 px-2 py-1",
                         "bg-primary/10 ring-1 ring-primary/30",
@@ -9915,7 +9953,7 @@ export default function AppShell({ defaultCwd }: { defaultCwd: string }) {
                         title="Revert this message and everything after it"
                         aria-label="Revert this message and everything after it"
                       >
-                        <Undo2 className="size-3" />
+                        <CornerUpLeft className="size-3.5 shrink-0" />
                         Revert
                       </Button> : null}
                     </div>
@@ -11118,10 +11156,6 @@ export default function AppShell({ defaultCwd }: { defaultCwd: string }) {
         compressionChatHistory={compressionChatHistory}
         onCompressionSettingsChange={updateCompressionSettings}
         models={models}
-        modelId={defaultModelId}
-        onModelIdChange={updateDefaultModel}
-        modelParams={defaultModelParams}
-        onModelParamsChange={updateDefaultModelParams}
         favoriteModelKeys={favoriteModelKeys}
         onToggleFavoriteModel={toggleFavoriteModel}
         subagentModelEnabled={subagentModelEnabled}

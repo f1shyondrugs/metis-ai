@@ -1,5 +1,8 @@
 const KNOWN_WINDOWS: Array<{ test: RegExp; tokens: number }> = [
   { test: /grok-3-mini/i, tokens: 131_072 },
+  // Cursor's Grok 4.6 model is a 200K context model; the generic Grok
+  // fallback must not turn an unknown/provider-reported value into 2M.
+  { test: /grok[-_. ]?4\.6\b/i, tokens: 200_000 },
   { test: /grok/i, tokens: 2_000_000 },
   { test: /gemini|gemma/i, tokens: 1_048_576 },
   { test: /claude/i, tokens: 200_000 },
@@ -207,9 +210,13 @@ export function contextWindowForModel(
   model: { id?: string; displayName?: string; contextWindow?: number } | null | undefined,
 ): number | undefined {
   const catalog = model?.contextWindow;
-  const raw = typeof catalog === "number" && Number.isFinite(catalog) && catalog > 8_000
-    ? Math.round(catalog)
-    : inferContextWindow(model?.id, model?.displayName);
+  const inferred = inferContextWindow(model?.id, model?.displayName);
+  const isAuthoritativeGrok46 = /grok[-_. ]?4\.6\b/i.test(`${model?.id || ""} ${model?.displayName || ""}`);
+  const raw = isAuthoritativeGrok46
+    ? inferred
+    : typeof catalog === "number" && Number.isFinite(catalog) && catalog > 8_000
+      ? Math.round(catalog)
+      : inferred;
   return typeof raw === "number" ? raw : undefined;
 }
 

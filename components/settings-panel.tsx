@@ -324,10 +324,6 @@ type Props = {
     compressChatHistory?: boolean;
   }) => void;
   models: ModelInfo[];
-  modelId: string;
-  onModelIdChange: (modelId: string) => void;
-  modelParams: ModelParamSelection[];
-  onModelParamsChange: (params: ModelParamSelection[]) => void;
   favoriteModelKeys: string[];
   onToggleFavoriteModel: (modelId: string) => void;
   subagentModelEnabled: boolean;
@@ -354,7 +350,6 @@ type Props = {
 
 const SETTINGS_SECTIONS: Record<string, Array<{ id: string; label: string }>> = {
   general: [
-    { id: "settings-default-model", label: "Default model" },
     { id: "settings-subagent-model", label: "Subagent model" },
     { id: "settings-token-compression", label: "Token compression" },
     { id: "settings-notifications", label: "Notifications" },
@@ -433,10 +428,6 @@ export function SettingsPanel({
   compressionChatHistory,
   onCompressionSettingsChange,
   models,
-  modelId,
-  onModelIdChange,
-  modelParams,
-  onModelParamsChange,
   favoriteModelKeys,
   onToggleFavoriteModel,
   subagentModelEnabled,
@@ -1450,31 +1441,6 @@ export function SettingsPanel({
  ) : (
  <>
 <TabsContent value="general" className="mt-0 space-y-10 px-6 py-6 sm:px-8 sm:py-8">
-
- <section className="flex flex-col gap-4">
-                <h3 id="settings-default-model" className="text-sm font-medium">Default model</h3>
-                  <p className="mt-1 text-xs text-muted-foreground">
-                    Choose the model used for new chats. Each user has an independent default.
-                  </p>
-                  <div className="mt-3 flex min-w-0 items-center gap-1">
-                    <ModelPicker
-                      models={models}
-                      value={modelId}
-                      onValueChange={onModelIdChange}
-                      favoriteModelKeys={favoriteModelKeys}
-                      onToggleFavorite={onToggleFavoriteModel}
-                      className="min-w-0 flex-1"
-                    />
-                    {models.find((model) => model.id === modelId) ? (
-                      <ModelOptionsMenu
-                        model={models.find((model) => model.id === modelId)!}
-                        modelParams={modelParams}
-                        onModelParamsChange={onModelParamsChange}
-                        className="opacity-100"
-                      />
-                    ) : null}
-                  </div>
- </section>
 
  <section className="flex flex-col gap-4">
                   <h3 id="settings-subagent-model" className="text-sm font-medium">Subagent model</h3>

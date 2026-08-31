@@ -23,7 +23,7 @@ test("contextWindowOf reads nested provider fields", () => {
 });
 
 test("inferContextWindow covers grok and gemini instead of a fake 128k cap", () => {
-  assert.equal(inferContextWindow("cursor:grok-4.6"), 2_000_000);
+  assert.equal(inferContextWindow("cursor:grok-4.6"), 200_000);
   assert.equal(inferContextWindow("google:gemini-2.5-pro"), 1_048_576);
   assert.equal(inferContextWindow("anthropic:claude-sonnet-4-6"), 200_000);
   assert.equal(inferContextWindow("grok-3-mini"), 131_072);
@@ -39,8 +39,9 @@ test("resolveContextTotal keeps the reported maximum when usage overflows", () =
   assert.equal(resolveContextTotal(undefined, 12_000), 0);
 });
 
-test("contextWindowForModel prefers catalog then inference", () => {
+test("contextWindowForModel prefers catalog except authoritative model overrides", () => {
   assert.equal(contextWindowForModel({ id: "grok-4", contextWindow: 256_000 }), 256_000);
+  assert.equal(contextWindowForModel({ id: "grok-4.6", contextWindow: 2_000_000 }), 200_000);
   assert.equal(contextWindowForModel({ id: "grok-4" }), 2_000_000);
   assert.equal(contextWindowForModel({ id: "grok-4", contextWindow: 128_000 }), 128_000);
   assert.equal(contextWindowForModel({ id: "zai:x:glm-4.6", contextWindow: 202_752 }), 202_752);
@@ -91,7 +92,7 @@ test("contextWindowForSelection follows the selected provider context parameter"
   assert.equal(contextWindowForSelection(cursorModel, [{ id: "context", value: "1.047576M" }]), 1_047_576);
  assert.equal(contextWindowForSelection(cursorModel, [{ id: "context", value: "unlimited" }]), 1_050_000);
  assert.equal(contextWindowForSelection({ id: "unknown-model" }, [{ id: "context", value: "max" }]), undefined);
- assert.equal(contextWindowForSelection({ id: "grok-4.6", providerId: "cursor" }), 2_000_000);
+ assert.equal(contextWindowForSelection({ id: "grok-4.6", providerId: "cursor", contextWindow: 2_000_000 }), 200_000);
 });
 
 test("current GPT-5 family fallbacks keep long-context and mini variants distinct", () => {

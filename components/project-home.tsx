@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useLayoutEffect, useRef, useState } from "react";
-import { ImagePlus, Plus, StickyNote, Trash2, Upload, X } from "lucide-react";
+import { ImagePlus, Paperclip, Plus, StickyNote, Trash2, Upload, X } from "lucide-react";
 import { ProjectAvatar, ProjectIconGlyph } from "@/components/project-avatar";
 import { ConfirmDialog } from "@/components/confirm-dialog";
 import { Button } from "@/components/ui/button";
@@ -76,12 +76,14 @@ export function ProjectHome({
  projectId,
  onOpenChat,
  onNewChat,
+ onAttachFile,
  onOpenNotes,
  onDeleted,
 }: {
  projectId: string;
  onOpenChat: (chatId: string) => void;
  onNewChat: (projectId: string) => void;
+ onAttachFile: (file: { id: string; name: string; mimeType: string; size: number }) => void;
  onOpenNotes: (noteId?: string) => void;
  onDeleted: () => void;
 }) {
@@ -109,19 +111,18 @@ export function ProjectHome({
  setError("");
  };
 
- const load = useCallback((signal?: AbortSignal) => {
+ const load = useCallback(async (signal?: AbortSignal) => {
  const generation = loadGenerationRef.current;
- void fetch(`/api/projects/${encodeURIComponent(projectId)}`, { cache: "no-store", signal })
- .then(async (response) => {
- const body = (await response.json().catch(() => ({}))) as ProjectHomeData & { error?: string };
- if (signal?.aborted || generation !== loadGenerationRef.current) return;
- if (!response.ok) throw new Error(body.error || "Could not load project.");
- applyBody(body);
- })
- .catch((cause) => {
- if (signal?.aborted || (cause instanceof DOMException && cause.name === "AbortError") || (cause instanceof Error && cause.name === "AbortError")) return;
- setError(cause instanceof Error ? cause.message : "Could not load project.");
- });
+ try {
+  const response = await fetch(`/api/projects/${encodeURIComponent(projectId)}`, { cache: "no-store", signal });
+  const body = (await response.json().catch(() => ({}))) as ProjectHomeData & { error?: string };
+  if (signal?.aborted || generation !== loadGenerationRef.current) return;
+  if (!response.ok) throw new Error(body.error || "Could not load project.");
+  applyBody(body);
+ } catch (cause) {
+  if (signal?.aborted || (cause instanceof DOMException && cause.name === "AbortError") || (cause instanceof Error && cause.name === "AbortError")) return;
+  setError(cause instanceof Error ? cause.message : "Could not load project.");
+ }
  }, [projectId]);
 
  useLayoutEffect(() => {
@@ -178,31 +179,25 @@ export function ProjectHome({
      setError(`${file.name} is larger than ${MAX_PROJECT_FILE_BYTES / 1024 / 1024}MB.`);
      continue;
     }
-    const form = new FormData();
-    form.set("file", file, file.name);
-    form.set("name", file.name);
-    if (file.type) form.set("mimeType", file.type);
+    // Use the same upload contract as the normal chat composer: JSON with
+    // browser-side base64 data. This avoids runtime-dependent FormData/Blob
+    // handling and makes the Project Hub behave identically across browsers.
     const response = await fetch(`/api/projects/${encodeURIComponent(projectId)}/files`, {
-              method: "POST",
-              body: form,
-            });
-            if (!response.ok) {
-              const fallback = await fetch(`/api/projects/${encodeURIComponent(projectId)}/files`, {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({
-                  name: file.name,
-                  mimeType: file.type || undefined,
-                  data: await fileToBase64(file),
-                }),
-              });
-              if (!fallback.ok) {
-                const body = (await fallback.json().catch(() => ({}))) as { error?: string };
-                throw new Error(body.error || `Could not upload ${file.name}.`);
-              }
-            }
+     method: "POST",
+     credentials: "same-origin",
+     headers: { "Content-Type": "application/json" },
+     body: JSON.stringify({
+      name: file.name,
+      mimeType: file.type || undefined,
+      data: await fileToBase64(file),
+     }),
+    });
+    if (!response.ok) {
+     const body = (await response.json().catch(() => ({}))) as { error?: string };
+     throw new Error(body.error || `Could not upload ${file.name}.`);
     }
-   load();
+    }
+   await load();
   } catch (cause) {
    setError(cause instanceof Error ? cause.message : "Could not upload files.");
   } finally {
@@ -373,15 +368,18 @@ export function ProjectHome({
    <section className="grid gap-3">
     <h3 className="text-sm font-medium">Files</h3>
     <div
-      role="button"
-      tabIndex={0}
       className={cn(
-        "relative flex cursor-pointer flex-col items-center justify-center gap-2 rounded-2xl border border-dashed px-4 py-8 text-center transition-colors",
+        "flex cursor-pointer flex-col items-center justify-center gap-2 rounded-2xl border border-dashed px-4 py-8 text-center transition-colors",
         dragOver ? "border-foreground/40 bg-white/[0.04]" : "border-border/70 hover:border-foreground/25 hover:bg-white/[0.02]",
+        busy && "pointer-events-none opacity-70",
       )}
-      onClick={() => fileInputRef.current?.click()}
+      role="button"
+      tabIndex={busy ? -1 : 0}
+      onClick={() => {
+        if (!busy) fileInputRef.current?.click();
+      }}
       onKeyDown={(event) => {
-        if (event.key === "Enter" || event.key === " ") {
+        if (!busy && (event.key === "Enter" || event.key === " ")) {
           event.preventDefault();
           fileInputRef.current?.click();
         }
@@ -405,8 +403,8 @@ export function ProjectHome({
         ref={fileInputRef}
         type="file"
         multiple
-        className="sr-only"
-        onClick={(event) => event.stopPropagation()}
+        aria-label="Upload project files"
+        className="hidden"
         onChange={(event) => {
           const files = event.target.files;
           event.target.value = "";
@@ -426,6 +424,16 @@ export function ProjectHome({
         {file.name}
         <span className="ml-2 text-xs text-muted-foreground">{formatBytes(file.size)}</span>
        </a>
+       <Button
+        type="button"
+        variant="ghost"
+        size="icon-sm"
+        aria-label={`Attach ${file.name} to the next chat`}
+        title="Attach to next chat"
+        onClick={() => onAttachFile(file)}
+       >
+        <Paperclip className="size-3.5" />
+       </Button>
        <Button
         type="button"
         variant="ghost"

@@ -33,7 +33,9 @@ export async function POST(req: Request, { params }: Params) {
    const uploaded = form.get("file");
    name = String(form.get("name") || "").trim();
    mimeType = String(form.get("mimeType") || "").trim() || undefined;
-   if (uploaded && typeof uploaded === "object" && "arrayBuffer" in uploaded) {
+   const isBlobLike = uploaded && typeof uploaded === "object" &&
+    typeof (uploaded as { arrayBuffer?: unknown }).arrayBuffer === "function";
+   if (uploaded instanceof Blob || isBlobLike) {
      const blob = uploaded as Blob & { name?: string; type?: string };
      if (!name) name = String(blob.name || "").trim();
      if (!mimeType) mimeType = blob.type || undefined;

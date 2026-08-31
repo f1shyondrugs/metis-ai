@@ -24,7 +24,6 @@ function headingIdsInTab(source: string, tab: string) {
 test("settings subsection links match the heading order in each tab", () => {
   const sections = parseSettingsSections(settingsSource);
   assert.deepEqual(sections.general, [
-    "settings-default-model",
     "settings-subagent-model",
     "settings-token-compression",
     "settings-notifications",
@@ -36,6 +35,12 @@ test("settings subsection links match the heading order in each tab", () => {
   for (const tab of Object.keys(sections)) {
     assert.deepEqual(headingIdsInTab(settingsSource, tab), sections[tab], tab);
   }
+});
+
+test("General settings no longer expose a Default model control", () => {
+  assert.doesNotMatch(settingsSource, /Default model/);
+  assert.doesNotMatch(settingsSource, /settings-default-model/);
+  assert.doesNotMatch(settingsSource, /Choose the model used for new chats/);
 });
 
 test("browser storage uses a dedicated manager instead of an inline origin list on General", () => {
