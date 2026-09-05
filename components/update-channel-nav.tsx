@@ -107,6 +107,27 @@ export function UpdateStatusProbe({
   onUpdateAvailableChange: (available: boolean) => void;
 }) {
   const [channel, setChannel] = useState<UpdateChannel>("releases");
+  const [nextScheduledUpdate, setNextScheduledUpdate] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!isHostAdmin) return;
+    let active = true;
+    const loadSchedule = async () => {
+      const response = await fetch("/api/admin/system/update-schedule", { cache: "no-store" });
+      const next = (await response.json().catch(() => ({}))) as UpdateScheduleState;
+      if (active) setNextScheduledUpdate(next.nextRunAt || null);
+    };
+    void loadSchedule().catch(() => undefined);
+    const timer = window.setInterval(() => void loadSchedule().catch(() => undefined), 30_000);
+    return () => { active = false; window.clearInterval(timer); };
+  }, [isHostAdmin]);
+
+  useEffect(() => {
+    if (!nextScheduledUpdate) return;
+    const target = new Date(nextScheduledUpdate).getTime();
+    const timers = [10, 5, 1].map((minutes) => window.setTimeout(() => toast.info(`Automatic update in ${minutes} minute${minutes === 1 ? "" : "s"}.`), Math.max(0, target - Date.now() - minutes * 60_000)));
+    return () => timers.forEach((timer) => window.clearTimeout(timer));
+  }, [nextScheduledUpdate]);
 
   useEffect(() => {
     const saved = window.localStorage.getItem(STORAGE_KEY);
@@ -167,16 +188,6 @@ export function UpdateSettingsPanel({
     const timer = window.setInterval(() => void loadSchedule().catch(() => undefined), 30_000);
     return () => { active = false; window.clearInterval(timer); };
   }, [isHostAdmin]);
-
-  useEffect(() => {
-    if (!schedule?.nextRunAt) return;
-    const target = new Date(schedule.nextRunAt).getTime();
-    const timers = [10, 5, 1].map((minutes) => {
-      const delay = target - Date.now() - minutes * 60_000;
-      return window.setTimeout(() => toast.info(`Automatic update in ${minutes} minute${minutes === 1 ? "" : "s"}.`), Math.max(0, delay));
-    });
-    return () => timers.forEach((timer) => window.clearTimeout(timer));
-  }, [schedule?.nextRunAt]);
 
   useEffect(() => {
     const savedJobId = window.localStorage.getItem(UPDATE_JOB_STORAGE_KEY);
