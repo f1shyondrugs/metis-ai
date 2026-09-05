@@ -10225,12 +10225,12 @@ export default function AppShell({ defaultCwd }: { defaultCwd: string }) {
             <div
               ref={composerContainerRef}
               className={cn(
-                "pointer-events-none absolute inset-x-0 bottom-0 z-20 bg-gradient-to-t from-background via-background/95 to-transparent pt-7",
+                "pointer-events-none absolute inset-x-0 bottom-0 z-20 bg-gradient-to-t from-background via-background/95 to-transparent pt-5",
                 composerFocused && "max-md:fixed max-md:z-30",
               )}
               style={composerFocused ? { bottom: mobileKeyboardInset } : undefined}
             >
-              <div className="pointer-events-none pt-2 sm:pt-3" style={{ paddingBottom: "max(0.75rem, env(safe-area-inset-bottom))" }}>
+              <div className="pointer-events-none pt-2 sm:pt-3" style={{ paddingBottom: "max(0.25rem, env(safe-area-inset-bottom))" }}>
                 <div className="pointer-events-auto relative mx-auto w-full max-w-2xl px-3 sm:px-6">
                   {showScrollDown || hasCurrentAttention ? (
                     <Button

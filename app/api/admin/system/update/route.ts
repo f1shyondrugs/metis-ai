@@ -9,6 +9,7 @@ import {
   type UpdateChannel,
 } from "@/lib/github-releases";
 import { getUpdateJob, startNativeCommitUpdateJob, startNativeUpdateJob } from "@/lib/update-job";
+import { activateProductionSlot } from "@/lib/production-slot";
 
 const execFileAsync = promisify(execFile);
 const DOCKER_INSTALLER_BASE = "https://github.com/f1shyondrugs/metis-ai/releases/download";
@@ -100,6 +101,7 @@ export async function POST(req: Request) {
       if (action === "activate") {
         const preparedManifest = JSON.parse(await readFile(`${config.root}/${inactiveSlot}/release-manifest.json`, "utf8")) as { commit?: string };
         if (preparedManifest.commit !== update.latestCommit) return Response.json({ error: "The selected master commit has not been prepared in the inactive slot." }, { status: 409 });
+        await activateProductionSlot(config.root, inactiveSlot);
         await execFileAsync("systemctl", ["restart", "--no-block", `${config.serviceName}.service`, `${config.serviceName}-worker.service`, `${config.serviceName}-mcp.service`], { timeout: 30_000, maxBuffer: 1 * 1024 * 1024 });
         return Response.json({ ok: true, status: "activating", latestCommit: update.latestCommit, message: "The master commit is being activated. Metis will restart on the new development build." }, { status: 202 });
       }
@@ -114,6 +116,7 @@ export async function POST(req: Request) {
       if (preparedManifest.tag !== update.latestTag) {
         return Response.json({ error: "The verified release has not been prepared in the inactive slot." }, { status: 409 });
       }
+      await activateProductionSlot(config.root, inactiveSlot);
       await execFileAsync("systemctl", [
         "restart",
         "--no-block",

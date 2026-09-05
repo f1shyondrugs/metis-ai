@@ -4,6 +4,7 @@ import { getDatabase } from "@/lib/sqlite";
 import { config } from "@/lib/config";
 import { checkForUpdate } from "@/lib/github-releases";
 import { getUpdateJob, startNativeUpdateJob } from "@/lib/update-job";
+import { activateProductionSlot } from "@/lib/production-slot";
 
 const execFileAsync = promisify(execFile);
 
@@ -83,6 +84,7 @@ export function startUpdateScheduler() {
           const current = getUpdateJob(job.jobId);
           if (current?.status === "failed") throw new Error(current.error || "Automatic update preparation failed.");
           if (current?.status === "ready") {
+            await activateProductionSlot(config.root, activeSlot === ".next-a" ? ".next-b" : ".next-a");
             await execFileAsync("systemctl", ["restart", "--no-block", `${config.serviceName}.service`, `${config.serviceName}-worker.service`, `${config.serviceName}-mcp.service`], { timeout: 30_000 });
             break;
           }
