@@ -91,13 +91,13 @@ import { AutomationsPanel } from "@/components/automations-panel";
 import { NotesVoid } from "@/components/notes-void";
 import { ProjectNav } from "@/components/project-nav";
 import { ProjectHome } from "@/components/project-home";
-import { UpdateBanner } from "@/components/update-banner";
 import { VoiceInput } from "@/components/voice-input";
 import { SubagentChatView } from "@/components/subagent-chat-view";
 import { RichUserText } from "@/components/rich-user-text";
 import { ProviderSetupDialog } from "@/components/provider-setup-dialog";
 import { SetupWizard } from "@/components/setup-wizard";
 import { BrowserSettingsControls } from "@/components/browser-settings-controls";
+import { UpdateStatusProbe } from "@/components/update-channel-nav";
 import { CommandPalette } from "@/components/command-palette";
 import type { MemoryItem } from "@/components/memories-panel";
 import type { ChatLogEntry, ChatLogCategory } from "@/lib/chat-logs";
@@ -2096,6 +2096,7 @@ export default function AppShell({ defaultCwd }: { defaultCwd: string }) {
   const [memories, setMemories] = useState<MemoryItem[]>([]);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [settingsTab, setSettingsTab] = useState("general");
+  const [settingsUpdateAvailable, setSettingsUpdateAvailable] = useState(false);
   const [chatLogsOpen, setChatLogsOpen] = useState(false);
   const [chatLogs, setChatLogs] = useState<ChatLogEntry[]>([]);
   const [chatLogsChatId, setChatLogsChatId] = useState<string | null>(null);
@@ -9001,7 +9002,16 @@ export default function AppShell({ defaultCwd }: { defaultCwd: string }) {
             setSettingsOpen(true);
           }}
         >
-          <Settings className="size-3.5 shrink-0" />
+          <span className="relative shrink-0">
+            <Settings className="size-3.5" />
+            {settingsUpdateAvailable ? (
+              <span
+                className="absolute -right-1 -top-1 size-2 rounded-full bg-emerald-500 ring-2 ring-background"
+                aria-label="Update Available"
+                title="Update Available"
+              />
+            ) : null}
+          </span>
           <span className="truncate">Settings</span>
         </Button>
       </div>
@@ -9093,6 +9103,10 @@ export default function AppShell({ defaultCwd }: { defaultCwd: string }) {
       onTouchStart={handleTouchStart}
       onTouchEnd={handleTouchEnd}
     >
+      <UpdateStatusProbe
+        isHostAdmin={Boolean(status?.isHostAdmin)}
+        onUpdateAvailableChange={setSettingsUpdateAvailable}
+      />
       <CommandPalette
         open={commandPaletteOpen}
         onOpenChange={setCommandPaletteOpen}
@@ -9229,7 +9243,6 @@ export default function AppShell({ defaultCwd }: { defaultCwd: string }) {
       </div>
 
       <div className="relative flex min-h-0 min-w-0 flex-1 flex-col">
-        <UpdateBanner />
         {/* Thin top bar */}
         <header className="relative z-20 flex h-14 shrink-0 items-center gap-2.5 border-b border-border/55 bg-background px-3.5 md:h-12 md:gap-2 md:px-4">
           <Button

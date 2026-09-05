@@ -6,8 +6,9 @@ import { config } from "@/lib/config";
 import { isHostAdmin } from "@/lib/user-access";
 import {
   checkForUpdate,
-  prepareNativeReleaseUpdate,
+  type UpdateChannel,
 } from "@/lib/github-releases";
+import { getUpdateJob, startNativeUpdateJob } from "@/lib/update-job";
 
 const execFileAsync = promisify(execFile);
 const DOCKER_INSTALLER_BASE = "https://github.com/f1shyondrugs/metis-ai/releases/download";
@@ -31,7 +32,15 @@ export async function GET(req: Request) {
   const access = await requireHostAdmin(req, "Only host administrators can check for updates.");
   if ("response" in access) return access.response;
   try {
-    const update = await checkForUpdate(config.root);
+    const searchParams = new URL(req.url).searchParams;
+    const jobId = searchParams.get("job");
+    if (jobId) {
+      const job = getUpdateJob(jobId);
+      if (!job) return Response.json({ error: "Update job not found. It may have expired after a service restart." }, { status: 404 });
+      return Response.json(job, { headers: { "Cache-Control": "private, no-store" } });
+    }
+    const channel: UpdateChannel = searchParams.get("channel") === "commits" ? "commits" : "releases";
+    const update = await checkForUpdate(config.root, fetch, channel);
     return Response.json(update, { headers: { "Cache-Control": "private, no-store" } });
   } catch (error) {
     return Response.json({
@@ -47,16 +56,18 @@ export async function POST(req: Request) {
 
   let requestedTag: string | undefined;
   let action: "prepare" | "activate" = "prepare";
+  let channel: UpdateChannel = "releases";
   try {
-    const body = await req.json().catch(() => ({})) as { tag?: unknown; action?: unknown };
+    const body = await req.json().catch(() => ({})) as { tag?: unknown; action?: unknown; channel?: unknown };
     if (typeof body.tag === "string") requestedTag = body.tag;
     if (body.action === "activate") action = "activate";
+    if (body.channel === "commits") channel = "commits";
   } catch {
     requestedTag = undefined;
   }
 
   try {
-    const update = await checkForUpdate(config.root);
+    const update = await checkForUpdate(config.root, fetch, channel);
     if (!update.updateAvailable) {
       return Response.json({
         status: update.status,
@@ -67,6 +78,14 @@ export async function POST(req: Request) {
     }
     if (requestedTag && requestedTag !== update.latestTag) {
       return Response.json({ error: "The requested release is not the currently verified latest stable release." }, { status: 409 });
+    }
+    if (channel === "commits") {
+      return Response.json({
+        status: "commit-available",
+        latestCommit: update.latestCommit,
+        commitUrl: update.commitUrl,
+        message: "A newer master commit is available. Commit updates are intentionally not auto-built in production; use a development checkout to try them.",
+      }, { status: 409 });
     }
     if (config.docker) {
       const installerUrl = dockerInstallerUrl(update.latestTag);
@@ -104,15 +123,15 @@ export async function POST(req: Request) {
       }, { status: 202 });
     }
 
-    const prepared = await prepareNativeReleaseUpdate(config.root, update.release, activeSlot);
+    if (!update.release) throw new Error("The selected release channel did not return a stable release.");
+    const job = startNativeUpdateJob(config.root, update.release, activeSlot);
     return Response.json({
       ok: true,
-      status: "ready",
+      status: "preparing",
+      jobId: job.jobId,
       latestTag: update.latestTag,
-      ...prepared,
-      requiresActivation: true,
-      message: "The verified release was built in the inactive production slot. Activate it during a maintenance window or restart the Metis service.",
-    });
+      message: "Update preparation started in the background. This can take several minutes; you can keep using Metis while it runs.",
+    }, { status: 202 });
   } catch (error) {
     const detail = error && typeof error === "object" && "stderr" in error
       ? String((error as { stderr?: unknown }).stderr || "")

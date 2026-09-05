@@ -33,6 +33,31 @@ export type SidebarChat = {
  incognito?: boolean;
 };
 
+const PROJECT_SYNC_INTERVAL_MS = 60_000;
+let projectCache: SidebarProject[] | null = null;
+let projectCacheAt = 0;
+let projectRequest: Promise<SidebarProject[]> | null = null;
+
+function loadProjectCache(force = false) {
+ const now = Date.now();
+ if (!force && projectCache && now - projectCacheAt < PROJECT_SYNC_INTERVAL_MS) {
+  return Promise.resolve(projectCache);
+ }
+ if (!force && projectRequest) return projectRequest;
+ projectRequest = fetch("/api/projects", { cache: "no-store" })
+  .then(async (response) => {
+   const body = (await response.json().catch(() => ({}))) as { projects?: SidebarProject[] };
+   if (!response.ok) throw new Error("Could not load projects");
+   projectCache = body.projects || [];
+   projectCacheAt = Date.now();
+   return projectCache;
+  })
+  .finally(() => {
+   projectRequest = null;
+  });
+ return projectRequest;
+}
+
 export function ProjectNav({
  chats,
  activeChatId,
@@ -65,20 +90,21 @@ export function ProjectNav({
  const [color, setColor] = useState(PROJECT_COLORS[0]);
  const [draggingId, setDraggingId] = useState<string | null>(null);
 
- const load = useCallback(() => {
-  void fetch("/api/projects", { cache: "no-store" })
-   .then(async (response) => {
-    const body = (await response.json().catch(() => ({}))) as { projects?: SidebarProject[] };
-    if (response.ok) setProjects(body.projects || []);
-   })
+ const load = useCallback((force = false) => {
+  void loadProjectCache(force)
+   .then((next) => setProjects(next))
    .catch(() => undefined);
  }, []);
 
  useEffect(() => {
   load();
-  const refresh = () => load();
+  const refresh = () => load(true);
+  const timer = window.setInterval(() => load(), PROJECT_SYNC_INTERVAL_MS);
   window.addEventListener("metis:projects-changed", refresh);
-  return () => window.removeEventListener("metis:projects-changed", refresh);
+  return () => {
+   window.clearInterval(timer);
+   window.removeEventListener("metis:projects-changed", refresh);
+  };
  }, [load]);
 
  const visibleChats = useMemo(() => {
@@ -99,7 +125,7 @@ export function ProjectNav({
   if (!response.ok || !body.project) return;
   setCreateOpen(false);
   setName("");
-  load();
+  load(true);
   window.dispatchEvent(new Event("metis:projects-changed"));
   onOpenProject(body.project.id);
  onCollapseNav?.();

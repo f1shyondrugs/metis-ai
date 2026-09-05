@@ -65,6 +65,7 @@ import { AdminUsersPanel } from "@/components/admin-users-panel";
 import type { AgentMode, ToolPermissionCategory } from "@/lib/store";
 import { TOOL_PERMISSION_CATEGORIES } from "@/lib/modes";
 import { PlanUsagePanel } from "@/components/quota-gauges";
+import { UpdateSettingsPanel, UpdateStatusProbe } from "@/components/update-channel-nav";
 import type { UsageSnapshot } from "@/lib/usage-display";
 
 type ProviderDefinition = {
@@ -191,6 +192,7 @@ type RemoteClient = {
   hostname?: string;
   lastSeenAt?: string;
   policy: { mode: "restricted" | "approval_required" | "full_access"; allowlist: string[] };
+  permissionMode: "user" | "admin";
   capabilities?: string[];
 };
 
@@ -384,6 +386,7 @@ const SETTINGS_TABS = [
  { value: "models", label: "Models" },
  { value: "agent", label: "Agent" },
  { value: "devices", label: "Devices" },
+ { value: "updates", label: "Updates" },
  { value: "admin", label: "Admin" },
 ] as const;
 
@@ -467,6 +470,7 @@ export function SettingsPanel({
   const [browserStorageDeleteTarget, setBrowserStorageDeleteTarget] = useState<string | null>(null);
   const [browserStorageClearAll, setBrowserStorageClearAll] = useState(false);
   const [settingsPane, setSettingsPane] = useState<"tab" | "browser-storage">("tab");
+  const [updateAvailable, setUpdateAvailable] = useState(false);
   const [browserStorageQuery, setBrowserStorageQuery] = useState("");
   const [compressionPreview, setCompressionPreview] = useState("");
   const [compressionPreviewResult, setCompressionPreviewResult] = useState<{
@@ -484,6 +488,7 @@ export function SettingsPanel({
   const [remoteCommand, setRemoteCommand] = useState("");
   const [remoteCommands, setRemoteCommands] = useState<{ linux: string; windows: string; macos: string } | null>(null);
   const [remotePlatform, setRemotePlatform] = useState<"linux" | "windows" | "macos">("linux");
+  const [remotePermissionMode, setRemotePermissionMode] = useState<"user" | "admin">("user");
   const [remotePairStep, setRemotePairStep] = useState<"idle" | "os" | "install" | "finish">("idle");
   const [remotePairExistingIds, setRemotePairExistingIds] = useState<string[]>([]);
   const [remoteBusy, setRemoteBusy] = useState(false);
@@ -584,7 +589,7 @@ export function SettingsPanel({
       const response = await fetch("/api/remote-clients", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ os: platform }),
+        body: JSON.stringify({ os: platform, permissionMode: remotePermissionMode }),
       });
       const data = (await response.json()) as { command?: string; commands?: { linux?: string; windows?: string; macos?: string }; error?: string };
       if (!response.ok || !data.command) throw new Error(data.error || "Failed to create enrollment command");
@@ -602,7 +607,7 @@ export function SettingsPanel({
     } finally {
       setRemoteBusy(false);
     }
-  }, [remoteClients, remotePlatform]);
+  }, [remoteClients, remotePermissionMode, remotePlatform]);
 
   const copyRemoteCommand = useCallback(async () => {
     const command = remoteCommands?.[remotePlatform] || remoteCommand;
@@ -1324,6 +1329,7 @@ export function SettingsPanel({
         </DialogHeader>
 
         <Tabs value={settingsTab} onValueChange={(tab) => { setSettingsPane("tab"); setBrowserStorageQuery(""); onSettingsTabChange(tab); }} className="min-h-0 flex-1 gap-0 md:grid md:items-stretch md:grid-cols-[13rem_minmax(0,1fr)]">
+          <UpdateStatusProbe isHostAdmin={Boolean(isHostAdmin)} onUpdateAvailableChange={setUpdateAvailable} />
           <div className="border-b border-border bg-muted/20 p-3 md:hidden">
             <CustomSelect
               value={settingsTab}
@@ -1335,6 +1341,7 @@ export function SettingsPanel({
                 { value: "models", label: "Models" },
                 { value: "agent", label: "Agent" },
  { value: "devices", label: "Devices" },
+ { value: "updates", label: updateAvailable ? "Update Available" : "Updates" },
  { value: "admin", label: isHostAdmin ? "Admin" : "Chats" },
               ]}
             />
@@ -1346,12 +1353,21 @@ export function SettingsPanel({
            : tab.value === "models" ? KeyRound
            : tab.value === "agent" ? Puzzle
            : tab.value === "devices" ? PlugZap
+           : tab.value === "updates" ? RefreshCw
            : Users;
-           const label = tab.value === "admin" ? (isHostAdmin ? "Admin" : "Chats") : tab.label;
+           const label = tab.value === "updates" && updateAvailable
+             ? "Update Available"
+             : tab.value === "admin" ? (isHostAdmin ? "Admin" : "Chats") : tab.label;
            const expanded = settingsTab === tab.value;
            return (
            <Fragment key={tab.value}>
-           <TabsTrigger value={tab.value} className="min-h-10 justify-start px-3.5 py-2.5 md:h-auto md:w-full md:flex-none">
+           <TabsTrigger
+             value={tab.value}
+             className={cn(
+               "min-h-10 justify-start px-3.5 py-2.5 md:h-auto md:w-full md:flex-none",
+               tab.value === "updates" && updateAvailable && "border-emerald-500/40 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300",
+             )}
+           >
            <Icon data-icon="inline-start" />
            {label}
            </TabsTrigger>
@@ -1440,6 +1456,13 @@ export function SettingsPanel({
  </div>
  ) : (
  <>
+<TabsContent value="updates" className="mt-0 px-6 py-6 sm:px-8 sm:py-8">
+  <UpdateSettingsPanel
+    isHostAdmin={Boolean(isHostAdmin)}
+    onUpdateAvailableChange={setUpdateAvailable}
+  />
+</TabsContent>
+
 <TabsContent value="general" className="mt-0 space-y-10 px-6 py-6 sm:px-8 sm:py-8">
 
  <section className="flex flex-col gap-4">
@@ -2318,7 +2341,7 @@ export function SettingsPanel({
                   <div>
                     <h3 id="settings-remote-clients" className="text-sm font-medium">Remote Clients</h3>
                     <p className="mt-1 max-w-2xl text-xs text-muted-foreground">
-                      Clients use an outbound encrypted connection. New clients start with full access.
+                      Clients use an outbound encrypted connection. New clients start in Benutzerzugriff; administrative capabilities are never implicit.
                     </p>
                   </div>
                   <Button type="button" size="sm" onClick={() => setRemotePairStep("os")} disabled={remoteBusy}>
@@ -2345,14 +2368,14 @@ export function SettingsPanel({
                           </p>
                           <div className="mt-1.5">
                             <Badge
-                              variant={client.policy.mode === "full_access" ? "default" : "outline"}
+                              variant={client.permissionMode === "admin" ? "default" : "outline"}
                               className={client.policy.mode === "full_access"
                                 ? "border-emerald-500/30 bg-emerald-500/15 text-emerald-700 dark:text-emerald-300"
                                 : ""}
                             >
-                              {client.policy.mode === "full_access"
-                                ? "Full access enabled"
-                                : "Restricted"}
+                              {client.permissionMode === "admin"
+                                ? "Systemzugriff / Administrator · Bestätigung erforderlich"
+                                : "Benutzerzugriff · keine Administratorrechte"}
                             </Badge>
                           </div>
                           </div>
@@ -2364,7 +2387,7 @@ export function SettingsPanel({
                             <DropdownMenuContent align="end">
                               <DropdownMenuItem onClick={() => void testRemoteConnection(client)}>Test connection</DropdownMenuItem>
                               <DropdownMenuItem onClick={() => void updateRemotePolicy(client, client.policy.mode === "full_access" ? "restricted" : "full_access")}>
-                                {client.policy.mode === "full_access" ? "Switch to restricted" : "Enable full access"}
+                                {client.policy.mode === "full_access" ? "Switch to restricted" : "Enable approval policy"}
                               </DropdownMenuItem>
                               <DropdownMenuItem className="text-destructive" onClick={() => void revokeRemoteClient(client)}>Remove client</DropdownMenuItem>
                             </DropdownMenuContent>
@@ -2535,7 +2558,18 @@ export function SettingsPanel({
             })}
           </div>
           {remotePairStep === "os" ? (
-            <div className="grid grid-cols-1 gap-2 pt-1 sm:grid-cols-3">
+            <div className="space-y-4 pt-1">
+              <div className="space-y-2" role="radiogroup" aria-label="Permission mode">
+                <p className="text-sm font-medium">Berechtigungsmodus</p>
+                <div className="grid gap-2 sm:grid-cols-2">
+                  {([["user", "Benutzerzugriff", "Nur Benutzerdateien, -prozesse und erlaubte Verzeichnisse. Keine UAC-Abfrage."], ["admin", "Systemzugriff / Administrator", "Für alle Benutzer. UAC erforderlich; Systemfunktionen bleiben capability- und bestätigungspflichtig."]] as const).map(([value, label, description]) => (
+                    <button key={value} type="button" role="radio" aria-checked={remotePermissionMode === value} onClick={() => setRemotePermissionMode(value)} className={cn("rounded-xl border p-3 text-left transition-colors", remotePermissionMode === value ? "border-primary bg-primary/5" : "border-border/60 hover:bg-muted/50")}>
+                      <span className="block text-sm font-medium">{label}</span><span className="mt-1 block text-xs text-muted-foreground">{description}</span>
+                    </button>
+                  ))}
+                </div>
+              </div>
+              <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
               {([
                 ["linux", "Linux", Server],
                 ["windows", "Windows", MicrosoftLogo],
@@ -2546,6 +2580,7 @@ export function SettingsPanel({
                   <span>{label}</span>
                 </Button>
               ))}
+              </div>
             </div>
           ) : remotePairStep === "install" ? (
             <div className="min-w-0 space-y-4 rounded-xl border border-border/60 bg-muted/20 p-4">

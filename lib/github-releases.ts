@@ -12,6 +12,7 @@ import {
 
 const execFileAsync = promisify(execFile);
 const RELEASE_URL = "https://api.github.com/repos/f1shyondrugs/metis-ai/releases/latest";
+const COMMIT_URL = "https://api.github.com/repos/f1shyondrugs/metis-ai/commits/master";
 const USER_AGENT = "metis-ai-update-checker";
 const cache: { etag?: string; release?: GithubRelease; checkedAt?: number } = {};
 const CACHE_TTL_MS = 5 * 60_000;
@@ -34,15 +35,26 @@ export type GithubRelease = {
   assets?: GithubReleaseAsset[];
 };
 
-export type UpdateStatus = "development" | "up-to-date" | "available";
+export type UpdateChannel = "releases" | "commits";
+export type UpdateStatus = "development" | "up-to-date" | "available" | "commit-available";
+
+export type GithubCommit = {
+  sha: string;
+  html_url?: string;
+  commit?: { message?: string };
+};
 
 export type UpdateCheck = {
+  channel: UpdateChannel;
   status: UpdateStatus;
   latestTag: string;
+  latestCommit?: string;
+  commitUrl?: string;
+  commitMessage?: string;
   currentRef: string;
   currentManifest: ReleaseManifest;
   updateAvailable: boolean;
-  release: GithubRelease;
+  release?: GithubRelease;
 };
 
 export async function fetchLatestRelease(fetcher: typeof fetch = fetch): Promise<GithubRelease> {
@@ -63,6 +75,17 @@ export async function fetchLatestRelease(fetcher: typeof fetch = fetch): Promise
   cache.release = release;
   cache.checkedAt = now;
   return release;
+}
+
+export async function fetchLatestCommit(fetcher: typeof fetch = fetch): Promise<GithubCommit> {
+  const response = await fetcher(COMMIT_URL, {
+    headers: { "User-Agent": USER_AGENT, Accept: "application/vnd.github+json" },
+    cache: "no-store",
+  });
+  if (!response.ok) throw new Error(`GitHub commit lookup failed (${response.status}).`);
+  const commit = (await response.json()) as GithubCommit;
+  if (!commit.sha) throw new Error("GitHub returned a commit without a SHA.");
+  return commit;
 }
 
 export async function resolveCurrentRef(root: string): Promise<string> {
@@ -131,17 +154,36 @@ export function isReleaseNewer(release: GithubRelease, currentRef: string) {
   return false;
 }
 
-export async function checkForUpdate(root: string, fetcher?: typeof fetch): Promise<UpdateCheck> {
-  const [release, currentManifest] = await Promise.all([
-    fetchLatestRelease(fetcher),
-    loadReleaseManifest(root),
-  ]);
+export async function checkForUpdate(
+  root: string,
+  fetcher: typeof fetch = fetch,
+  channel: UpdateChannel = "releases",
+): Promise<UpdateCheck> {
+  const currentManifest = await loadReleaseManifest(root);
+  const currentRef = currentManifest.tag || currentManifest.commit || "unknown";
+  if (channel === "commits") {
+    const commit = await fetchLatestCommit(fetcher);
+    const updateAvailable = Boolean(currentManifest.commit && commit.sha !== currentManifest.commit);
+    return {
+      channel,
+      status: updateAvailable ? "commit-available" : "up-to-date",
+      latestTag: currentManifest.tag || currentManifest.version,
+      latestCommit: commit.sha,
+      commitUrl: commit.html_url,
+      commitMessage: commit.commit?.message,
+      currentRef,
+      currentManifest,
+      updateAvailable,
+    };
+  }
+
+  const release = await fetchLatestRelease(fetcher);
   const latestTag = normalizeReleaseTag(release.tag_name);
   if (!latestTag) throw new Error("Latest GitHub release has no valid SemVer tag.");
-  const currentRef = currentManifest.tag || currentManifest.commit || "unknown";
-  const updateAvailable = currentManifest.isRelease && compareReleaseVersions(latestTag, currentManifest.version) > 0;
+  const updateAvailable = !currentManifest.isRelease || compareReleaseVersions(latestTag, currentManifest.version) > 0;
   return {
-    status: !currentManifest.isRelease ? "development" : updateAvailable ? "available" : "up-to-date",
+    channel,
+    status: updateAvailable ? "available" : "up-to-date",
     latestTag,
     currentRef,
     currentManifest,
@@ -170,7 +212,9 @@ export async function prepareNativeReleaseUpdate(
   const inactiveSlot = activeSlot === ".next-a" ? ".next-b" : ".next-a";
   const stage = await mkdtemp(path.join(os.tmpdir(), "metis-release-"));
   const archive = path.join(stage, asset.name);
+  let operation = "starting native release update";
   try {
+    operation = "downloading the verified release bundle";
     const response = await fetcher(asset.browser_download_url, {
       headers: { "User-Agent": USER_AGENT, Accept: "application/octet-stream" },
       cache: "no-store",
@@ -178,13 +222,17 @@ export async function prepareNativeReleaseUpdate(
     if (!response.ok) throw new Error(`Release bundle download failed (${response.status}).`);
     await writeFile(archive, Buffer.from(await response.arrayBuffer()));
     const source = path.join(stage, "source");
+    operation = "creating the temporary update workspace";
     await execFileAsync("mkdir", ["-p", source]);
+    operation = "extracting the release bundle";
     await execFileAsync("tar", ["-xzf", archive, "-C", source, "--strip-components=1"], { timeout: 60_000 });
+    operation = "installing locked release dependencies";
     await execFileAsync(process.env.PNPM_BIN || "pnpm", ["install", "--frozen-lockfile"], {
       cwd: source,
       timeout: 15 * 60_000,
       maxBuffer: 2 * 1024 * 1024,
     });
+    operation = `building the inactive production slot ${inactiveSlot}`;
     await execFileAsync("bash", ["scripts/build-production-slot.sh", inactiveSlot], {
       cwd: source,
       env: {
@@ -198,6 +246,7 @@ export async function prepareNativeReleaseUpdate(
       timeout: 30 * 60_000,
       maxBuffer: 2 * 1024 * 1024,
     });
+    operation = `installing the prepared ${inactiveSlot} slot`;
     const preparedSlot = path.join(root, inactiveSlot);
     const incomingSlot = `${preparedSlot}.incoming`;
     await rm(incomingSlot, { recursive: true, force: true });
@@ -205,6 +254,12 @@ export async function prepareNativeReleaseUpdate(
     await rm(preparedSlot, { recursive: true, force: true });
     await rename(incomingSlot, preparedSlot);
     return { tag, activeSlot, preparedSlot: inactiveSlot, asset: asset.name };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    const stderr = error && typeof error === "object" && "stderr" in error
+      ? String((error as { stderr?: unknown }).stderr || "").trim()
+      : "";
+    throw new Error(`${operation} failed: ${message}${stderr ? ` — ${stderr.slice(-1200)}` : ""}`);
   } finally {
     await rm(stage, { recursive: true, force: true });
   }
