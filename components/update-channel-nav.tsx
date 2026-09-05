@@ -240,9 +240,10 @@ export function UpdateSettingsPanel({
         } else if (job.status === "ready") {
           window.localStorage.removeItem(UPDATE_JOB_STORAGE_KEY);
           setPreparing(false);
-          setPrepared(true);
+          setPrepared(false);
           setJobId(null);
-          setMessage(`Update prepared in ${job.result?.preparedSlot || "the inactive slot"}. Activate it when ready.`);
+          setMessage(`Update built in ${job.result?.preparedSlot || "the inactive slot"}. Activating it now…`);
+          void activateUpdate();
         } else if (job.status === "failed") {
           window.localStorage.removeItem(UPDATE_JOB_STORAGE_KEY);
           setPreparing(false);
@@ -397,8 +398,8 @@ export function UpdateSettingsPanel({
               Open Docker installer
             </a>
           ) : null}
-          <Button type="button" size="sm" onClick={() => void (prepared ? activateUpdate() : prepareUpdate())} disabled={busy || preparing}>
-            {busy || preparing ? <LoaderCircle className="size-4 animate-spin" /> : prepared ? "Activate update" : "Prepare update"}
+          <Button type="button" size="sm" onClick={() => void prepareUpdate()} disabled={busy || preparing}>
+            {busy || preparing ? <LoaderCircle className="size-4 animate-spin" /> : "Update"}
           </Button>
         </div>
       ) : null}
