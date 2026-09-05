@@ -98,6 +98,7 @@ import { ProviderSetupDialog } from "@/components/provider-setup-dialog";
 import { SetupWizard } from "@/components/setup-wizard";
 import { BrowserSettingsControls } from "@/components/browser-settings-controls";
 import { UpdateStatusProbe } from "@/components/update-channel-nav";
+import { MaintenanceScreen } from "@/components/maintenance-screen";
 import { CommandPalette } from "@/components/command-palette";
 import type { MemoryItem } from "@/components/memories-panel";
 import type { ChatLogEntry, ChatLogCategory } from "@/lib/chat-logs";
@@ -1886,6 +1887,7 @@ export default function AppShell({ defaultCwd }: { defaultCwd: string }) {
   const [modelsLoaded, setModelsLoaded] = useState(false);
   const [providerSetupOpen, setProviderSetupOpen] = useState(false);
   const [setupStatus, setSetupStatus] = useState<{ needed: boolean; hasUsers: boolean } | null>(null);
+  const [maintenanceState, setMaintenanceState] = useState<{ active?: boolean; reason?: string } | null>(null);
   const [modelSearch, setModelSearch] = useState("");
   const [modelSearchOpen, setModelSearchOpen] = useState(false);
   const [modelMenuOpen, setModelMenuOpen] = useState(false);
@@ -9019,6 +9021,24 @@ export default function AppShell({ defaultCwd }: { defaultCwd: string }) {
   );
 
    useEffect(() => {
+     let active = true;
+     const loadMaintenance = () => {
+       void fetch("/api/system/maintenance", { cache: "no-store" })
+         .then(async (response) => {
+           const body = (await response.json().catch(() => ({}))) as { active?: boolean; reason?: string };
+           if (active && response.ok) setMaintenanceState(body);
+         })
+         .catch(() => undefined);
+     };
+     loadMaintenance();
+     const timer = window.setInterval(loadMaintenance, 2_000);
+     return () => {
+       active = false;
+       window.clearInterval(timer);
+     };
+   }, []);
+
+   useEffect(() => {
      void fetch("/api/setup", { cache: "no-store" })
        .then(async (response) => {
          const body = (await response.json().catch(() => ({}))) as { needed?: boolean; hasUsers?: boolean };
@@ -9041,6 +9061,10 @@ export default function AppShell({ defaultCwd }: { defaultCwd: string }) {
      window.addEventListener("metis:projects-changed", loadProjects);
      return () => window.removeEventListener("metis:projects-changed", loadProjects);
    }, [authed]);
+
+ if (maintenanceState?.active) {
+   return <MaintenanceScreen reason={maintenanceState.reason} />;
+ }
 
  if (setupStatus?.needed) {
    return (

@@ -124,7 +124,7 @@ export async function POST(req: Request) {
     }
 
     if (!update.release) throw new Error("The selected release channel did not return a stable release.");
-    const job = startNativeUpdateJob(config.root, update.release, activeSlot);
+    const job = await startNativeUpdateJob(config.root, update.release, activeSlot);
     return Response.json({
       ok: true,
       status: "preparing",
