@@ -51,7 +51,7 @@ export NODE_ENV=production
 export NODE_OPTIONS="${NODE_OPTIONS:---max-old-space-size=4096}"
 # Normal optimized production build. Tailwind source detection is explicitly
 # bounded in app/globals.css, which avoids scanning runtime/workspace trees.
-pnpm exec next build
+pnpm build
 
 [[ -s "$BUILD_DIR/BUILD_ID" ]] || {
   echo "Build completed without $BUILD_DIR/BUILD_ID" >&2

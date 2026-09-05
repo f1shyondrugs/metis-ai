@@ -1,0 +1,118 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+      - "v*.*.*-*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing release tag to build and publish
+        required: true
+        type: string
+
+permissions:
+  contents: write
+  packages: write
+
+concurrency:
+  group: release-${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+  cancel-in-progress: false
+
+env:
+  TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+
+jobs:
+  release:
+    name: Build and publish release
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Check out tagged source
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TAG }}
+          fetch-depth: 0
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9.15.4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Validate release contract
+        env:
+          RELEASE_TAG: ${{ env.TAG }}
+        run: |
+          set -euo pipefail
+          [[ "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]
+          expected_version="${RELEASE_TAG#v}"
+          package_version="$(node -p 'require("./package.json").version')"
+          [[ "$package_version" == "$expected_version" ]]
+          echo "Release contract valid for $RELEASE_TAG"
+
+      - name: Run release tests
+        run: pnpm exec tsx --test tests/release-manifest.test.ts tests/github-releases.test.ts
+
+      - name: Build release manifest and application
+        env:
+          METIS_RELEASE_TAG: ${{ env.TAG }}
+          METIS_RELEASE_VERSION: ${{ env.TAG }}
+          METIS_RELEASE_COMMIT: ${{ github.sha }}
+        run: pnpm build
+
+      - name: Create native release bundle
+        run: |
+          set -euo pipefail
+          version="${TAG#v}"
+          git archive --format=tar.gz --prefix="metis-ai-${version}/" "$TAG" > "metis-ai-v${version}.tar.gz"
+          cp public/install/install.sh "metis-install.sh"
+          cp public/install/install.ps1 "metis-install.ps1"
+          cp public/install/docker.sh "metis-docker-install.sh"
+          sha256sum metis-ai-v${version}.tar.gz metis-install.sh metis-install.ps1 metis-docker-install.sh > SHA256SUMS
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push versioned Docker image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          tags: |
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ env.TAG }}
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
+          labels: |
+            org.opencontainers.image.version=${{ env.TAG }}
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+          build-args: |
+            METIS_RELEASE_TAG=${{ env.TAG }}
+            METIS_RELEASE_VERSION=${{ env.TAG }}
+            METIS_RELEASE_COMMIT=${{ github.sha }}
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          files: |
+            metis-ai-${{ env.TAG }}.tar.gz
+            metis-install.sh
+            metis-install.ps1
+            metis-docker-install.sh
+            SHA256SUMS

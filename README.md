@@ -67,14 +67,39 @@ remote clients and memories:
   <img src="./public/quick-start.png" alt="Quick start" width="100%">
 </p>
 
+### Versionierte Docker-Releases
+
+Für produktive Installationen ist der versionierte Docker-Installer der empfohlene
+Pfad. Er lädt ein unveränderliches Image aus GHCR, erstellt keine Git-Checkout-
+Abhängigkeit und legt Daten sowie Workspace außerhalb des Containers ab.
+
+```bash
+curl -fsSL https://github.com/f1shyondrugs/metis-ai/releases/latest/download/metis-docker-install.sh \\
+  -o metis-docker-install.sh
+bash metis-docker-install.sh --version latest
+```
+
+Für reproduzierbare Installationen kann ein konkreter Release-Tag verwendet werden:
+
+```bash
+bash metis-docker-install.sh --version v1.0.0
+```
+
+Ein Upgrade wird mit demselben Befehl und einer neuen Version ausgeführt. Die
+Installationsdatei `.metis-release.json`, `.env`, das Datenverzeichnis und der
+Workspace bleiben dabei erhalten; der Installer ersetzt nur den Image-Tag und
+startet die Compose-Services mit `docker compose pull` und `up -d` neu.
+
 ### One-line installer
 
-Docker is the recommended install path when `docker` and Compose are available.
-The installer mounts a workspace folder you choose (default: your home directory)
-and does not build Node on the host. Use `--native` / `-Native` to keep the
-previous Node.js + systemd/launchd/Task Scheduler flow. The one-liner downloads
-the platform installer to a temp file and executes that file — it does not run
-the installer from a pipe.
+The versioned Docker release installer above is recommended for production.
+This legacy cross-platform bootstrap remains useful for development checkouts
+or native fallback installations. When it detects Docker, it uses the current
+repository source; use the versioned installer above when reproducibility is
+required. Use `--native` / `-Native` to keep the Node.js +
+systemd/launchd/Task Scheduler flow. The one-liner downloads the platform
+installer to a temp file and executes that file — it does not run the installer
+from a pipe.
 
 ```bash
 /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/f1shyondrugs/metis-ai/master/install.sh)"
