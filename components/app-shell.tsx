@@ -693,6 +693,14 @@ function normalizeWorkspaceTab(value: unknown): NonNullable<ChatSessionState["wo
       : "canvas";
 }
 
+function isMobileChatViewport() {
+  return typeof window !== "undefined" && window.matchMedia("(max-width: 767px)").matches;
+}
+
+function workspaceOpenFromSession(sessionOpen: boolean | undefined) {
+  return !isMobileChatViewport() && Boolean(sessionOpen);
+}
+
 function normalizeTerminalTabs(session: ChatSessionState, defaultCwd: string): TerminalTab[] {
   const tabs = (session.terminalTabs || [])
     .filter((tab) => tab && typeof tab.id === "string" && typeof tab.cwd === "string")
@@ -2220,6 +2228,7 @@ export default function AppShell({ defaultCwd }: { defaultCwd: string }) {
   const bottomRef = useRef<HTMLDivElement>(null);
   const messagesScrollRef = useRef<HTMLDivElement>(null);
   const stickToBottomRef = useRef(true);
+  const enteringChatRef = useRef(false);
   const runtimeRef = useRef<Map<string, ChatRuntime>>(new Map());
   const queueDrainRef = useRef(false);
   const textareaRef = useRef<HTMLDivElement>(null);
@@ -3274,7 +3283,7 @@ export default function AppShell({ defaultCwd }: { defaultCwd: string }) {
         };
         if (data.source !== "agent") return;
         if (data.type === "pointer" && typeof data.x === "number" && typeof data.y === "number") {
-          setWorkspaceOpen(true);
+          if (!isMobileChatViewport()) setWorkspaceOpen(true);
           setWorkspaceTab("browser");
           setAgentPointer({
             x: Math.max(0, Math.min(1, data.x)),
@@ -3292,7 +3301,7 @@ export default function AppShell({ defaultCwd }: { defaultCwd: string }) {
         if (data.type !== "action" && data.type !== "navigation") return;
         // The event itself is proof that the active run is using the browser now.
         // No follow mode: the browser simply mirrors that one active run.
-        setWorkspaceOpen(true);
+        if (!isMobileChatViewport()) setWorkspaceOpen(true);
         setWorkspaceTab("browser");
         if (data.tabId && data.tabId !== activeBrowserTabIdRef.current) setActiveBrowserTabId(data.tabId);
         if (data.type === "navigation") {
@@ -3941,7 +3950,7 @@ export default function AppShell({ defaultCwd }: { defaultCwd: string }) {
         : snap.workspaces?.[0]?.id ?? null,
     );
     setWorkspaceTab(normalizeWorkspaceTab(session.workspaceTab));
-    setWorkspaceOpen(Boolean(session.workspaceOpen));
+    setWorkspaceOpen(workspaceOpenFromSession(session.workspaceOpen));
     setWorkspaceWidth(
       typeof session.workspaceWidth === "number"
         ? Math.min(WORKSPACE_MAX_WIDTH, Math.max(WORKSPACE_MIN_WIDTH, session.workspaceWidth))
@@ -4144,6 +4153,10 @@ export default function AppShell({ defaultCwd }: { defaultCwd: string }) {
         setMobileKeyboardInset(0);
         mobileKeyboardBaselineRef.current = 0;
       }
+      if (isMobileChatViewport()) {
+        setWorkspaceFullscreen(false);
+        setWorkspaceOpen(false);
+      }
       setNotesOpen(false);
       setAutomationsOpen(false);
       setProjectHomeId(null);
@@ -4162,6 +4175,7 @@ export default function AppShell({ defaultCwd }: { defaultCwd: string }) {
       if (!alreadyActive) persistActiveSnapshot();
       activeChatIdRef.current = id;
       stickToBottomRef.current = true;
+      enteringChatRef.current = true;
       if (!opts?.skipNav) navigateChat(id);
       chatLoadAbortRef.current?.abort();
       const controller = new AbortController();
@@ -4320,7 +4334,7 @@ export default function AppShell({ defaultCwd }: { defaultCwd: string }) {
                 : next.workspaces[0]?.id ?? null,
             );
             setWorkspaceTab(normalizeWorkspaceTab(session.workspaceTab));
-            setWorkspaceOpen(Boolean(session.workspaceOpen));
+            if (!isMobileChatViewport()) setWorkspaceOpen(Boolean(session.workspaceOpen));
             setWorkspaceWidth(
               typeof session.workspaceWidth === "number"
                 ? Math.min(WORKSPACE_MAX_WIDTH, Math.max(WORKSPACE_MIN_WIDTH, session.workspaceWidth))
@@ -4429,6 +4443,7 @@ export default function AppShell({ defaultCwd }: { defaultCwd: string }) {
     const id = activeChatIdRef.current;
     const el = messagesScrollRef.current;
     if (!id || !el || !hasEarlierMessages || loadingEarlierMessages) return;
+    if (enteringChatRef.current) return;
     const previousHeight = el.scrollHeight;
     setLoadingEarlierMessages(true);
     try {
@@ -4464,9 +4479,9 @@ export default function AppShell({ defaultCwd }: { defaultCwd: string }) {
         const scrollElement = messagesScrollRef.current;
         const previousHeight = scrollElement?.scrollHeight ?? 0;
         const previousTop = scrollElement?.scrollTop ?? 0;
-        const wasAtBottom = scrollElement
-          ? scrollElement.scrollHeight - scrollElement.scrollTop - scrollElement.clientHeight < 48
-          : false;
+        const wasAtBottom = enteringChatRef.current || stickToBottomRef.current || (scrollElement
+          ? scrollElement.scrollHeight - scrollElement.scrollTop - scrollElement.clientHeight < 80
+          : false);
         try {
           const res = await fetchReadWithRetry(
             `/api/chats/${activeChatId}?messageLimit=${CHAT_MESSAGE_LOAD_LIMIT}&messageOffset=${nextOffset}`,
@@ -5215,27 +5230,39 @@ export default function AppShell({ defaultCwd }: { defaultCwd: string }) {
   useEffect(() => {
     setShowScrollDown(false);
     notifiedPlanRef.current.clear();
+    enteringChatRef.current = true;
+    stickToBottomRef.current = true;
   }, [activeChatId, paneKey]);
 
   useEffect(() => {
     const el = messagesScrollRef.current;
     if (!el) return;
+    enteringChatRef.current = true;
     stickToBottomRef.current = true;
-    el.scrollTop = el.scrollHeight;
-    const frame = window.requestAnimationFrame(() => {
-      el.scrollTop = el.scrollHeight;
+    const pinMessagesToBottom = () => {
+      const node = messagesScrollRef.current;
+      if (!node) return;
+      node.scrollTop = node.scrollHeight;
+    };
+    pinMessagesToBottom();
+    let frame2 = 0;
+    const frame1 = window.requestAnimationFrame(() => {
+      pinMessagesToBottom();
+      frame2 = window.requestAnimationFrame(() => {
+        pinMessagesToBottom();
+        enteringChatRef.current = false;
+      });
     });
-    return () => window.cancelAnimationFrame(frame);
-  }, [activeChatId, paneKey]);
-
-  useEffect(() => {
-    if (loadingChatId || !activeChatId || !messages.length) return;
-    const frame = window.requestAnimationFrame(() => {
-      const el = messagesScrollRef.current;
-      if (el) el.scrollTop = el.scrollHeight;
-    });
-    return () => window.cancelAnimationFrame(frame);
-  }, [activeChatId, loadingChatId]);
+    const timer = window.setTimeout(() => {
+      pinMessagesToBottom();
+      enteringChatRef.current = false;
+    }, 200);
+    return () => {
+      window.cancelAnimationFrame(frame1);
+      window.cancelAnimationFrame(frame2);
+      window.clearTimeout(timer);
+    };
+  }, [activeChatId, paneKey, loadingChatId]);
 
   useEffect(() => {
     const el = messagesScrollRef.current;
@@ -5251,15 +5278,32 @@ export default function AppShell({ defaultCwd }: { defaultCwd: string }) {
     if (!el) return;
     const updateScrollState = () => {
       const distanceFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
-      const nearBottom = distanceFromBottom < 48;
+      const nearBottom = distanceFromBottom < 80;
+      if (enteringChatRef.current) {
+        stickToBottomRef.current = true;
+        setShowScrollDown(false);
+        return;
+      }
       stickToBottomRef.current = nearBottom;
       setShowScrollDown(!nearBottom);
-      if (el.scrollTop < 80) void loadEarlierMessages();
+      if (el.scrollTop < 80 && !nearBottom) void loadEarlierMessages();
     };
-    updateScrollState();
     el.addEventListener("scroll", updateScrollState, { passive: true });
-    return () => el.removeEventListener("scroll", updateScrollState);
-  }, [loadEarlierMessages, messages.length, paneKey]);
+    const inner = el.firstElementChild;
+    const pinIfStuckToBottom = () => {
+      if (!stickToBottomRef.current && !enteringChatRef.current) return;
+      el.scrollTop = el.scrollHeight;
+    };
+    const observer = new ResizeObserver(pinIfStuckToBottom);
+    if (inner) observer.observe(inner);
+    observer.observe(el);
+    const frame = window.requestAnimationFrame(pinIfStuckToBottom);
+    return () => {
+      el.removeEventListener("scroll", updateScrollState);
+      observer.disconnect();
+      window.cancelAnimationFrame(frame);
+    };
+  }, [loadEarlierMessages, paneKey, loadingChatId]);
 
   useEffect(() => {
     if (!highlightedMessageId) return;
@@ -7117,7 +7161,7 @@ export default function AppShell({ defaultCwd }: { defaultCwd: string }) {
             if (!keepCanvasVisible) {
               setActiveWorkspaceId(workspace.id);
               setWorkspaceTab(workspace.type === "plan" ? "plan" : "canvas");
-              setWorkspaceOpen(true);
+              if (!isMobileChatViewport()) setWorkspaceOpen(true);
             }
             setMessages((current) =>
               current.map((message) => {
@@ -7173,7 +7217,7 @@ export default function AppShell({ defaultCwd }: { defaultCwd: string }) {
             setWorkspaces((current) => mergeWorkspaceItems(current, workspace));
             setActiveWorkspaceId(workspace.id);
             setWorkspaceTab("canvas");
-            setWorkspaceOpen(true);
+            if (!isMobileChatViewport()) setWorkspaceOpen(true);
             setMessages((current) =>
               current.map((message) => {
                 if (message.id !== asstId) return message;

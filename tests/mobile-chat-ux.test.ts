@@ -53,3 +53,18 @@ test("legacy Codex diagnostic rows are hidden from existing chat history", () =>
   assert.match(shell, /name === "codex error" \|\| name === "codex todo list"/);
   assert.match(shell, /visibleTools = \(m\.tools \|\| \[\]\)\.filter\(\(tool\) => !isLegacyCodexNoiseTool\(tool\)\)/);
 });
+
+test("opening a chat pins the transcript to the bottom and does not page history while pinning", () => {
+  assert.match(shell, /enteringChatRef\.current = true/);
+  assert.match(shell, /if \(el\.scrollTop < 80 && !nearBottom\) void loadEarlierMessages\(\)/);
+  assert.match(shell, /new ResizeObserver\(pinIfStuckToBottom\)/);
+  assert.match(shell, /if \(enteringChatRef\.current\) return/);
+});
+
+test("mobile chat restore does not auto-open the workspace overlay", () => {
+  assert.match(shell, /function isMobileChatViewport\(\)/);
+  assert.match(shell, /function workspaceOpenFromSession\(sessionOpen: boolean \| undefined\)/);
+  assert.match(shell, /setWorkspaceOpen\(workspaceOpenFromSession\(session\.workspaceOpen\)\)/);
+  assert.match(shell, /if \(isMobileChatViewport\(\)\) \{[\s\S]*?setWorkspaceOpen\(false\);/);
+  assert.match(shell, /if \(!isMobileChatViewport\(\)\) setWorkspaceOpen\(true\)/);
+});
