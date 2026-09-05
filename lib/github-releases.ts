@@ -274,3 +274,64 @@ export async function prepareNativeReleaseUpdate(
     await rm(stage, { recursive: true, force: true });
   }
 }
+
+export async function prepareNativeCommitUpdate(
+  root: string,
+  commit: GithubCommit,
+  activeSlot: ".next-a" | ".next-b",
+  fetcher: typeof fetch = fetch,
+  logger?: (message: string) => void,
+) {
+  const sha = commit.sha.trim();
+  if (!/^[0-9a-f]{7,40}$/i.test(sha)) throw new Error("The master commit SHA is invalid.");
+  const inactiveSlot = activeSlot === ".next-a" ? ".next-b" : ".next-a";
+  const stage = await mkdtemp(path.join(os.tmpdir(), "metis-commit-"));
+  const archive = path.join(stage, `metis-ai-master-${sha}.tar.gz`);
+  let operation = "starting native master commit update";
+  const log = (message: string) => logger?.(message);
+  log(operation);
+  try {
+    operation = `downloading master commit ${sha.slice(0, 12)}`;
+    log(operation);
+    const response = await fetcher(`https://github.com/f1shyondrugs/metis-ai/archive/${sha}.tar.gz`, {
+      headers: { "User-Agent": USER_AGENT, Accept: "application/octet-stream" },
+      cache: "no-store",
+    });
+    if (!response.ok) throw new Error(`Master commit download failed (${response.status}).`);
+    await writeFile(archive, Buffer.from(await response.arrayBuffer()));
+    const source = path.join(stage, "source");
+    operation = "creating the temporary update workspace";
+    log(operation);
+    await execFileAsync("mkdir", ["-p", source]);
+    operation = "extracting the master commit";
+    log(operation);
+    await execFileAsync("tar", ["-xzf", archive, "-C", source, "--strip-components=1"], { timeout: 60_000 });
+    operation = "installing locked commit dependencies";
+    log(operation);
+    await execFileAsync(process.env.PNPM_BIN || "pnpm", ["install", "--frozen-lockfile"], { cwd: source, timeout: 15 * 60_000, maxBuffer: 2 * 1024 * 1024 });
+    operation = `building the inactive production slot ${inactiveSlot}`;
+    log(operation);
+    await execFileAsync("bash", ["scripts/build-production-slot.sh", inactiveSlot], {
+      cwd: source,
+      env: { ...process.env, AI_CHAT_ROOT: source, METIS_RELEASE_TAG: "", METIS_RELEASE_COMMIT: sha, NODE_ENV: "production" },
+      timeout: 30 * 60_000,
+      maxBuffer: 2 * 1024 * 1024,
+    });
+    operation = `installing the prepared ${inactiveSlot} slot`;
+    log(operation);
+    const preparedSlot = path.join(root, inactiveSlot);
+    const incomingSlot = `${preparedSlot}.incoming`;
+    await rm(incomingSlot, { recursive: true, force: true });
+    await cp(path.join(source, inactiveSlot), incomingSlot, { recursive: true });
+    await rm(preparedSlot, { recursive: true, force: true });
+    await rename(incomingSlot, preparedSlot);
+    return { tag: "master", commit: sha, activeSlot, preparedSlot: inactiveSlot, asset: archive };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    const stderr = error && typeof error === "object" && "stderr" in error ? String((error as { stderr?: unknown }).stderr || "").trim() : "";
+    log(`${operation} failed: ${message}`);
+    throw new Error(`${operation} failed: ${message}${stderr ? ` — ${stderr.slice(-1200)}` : ""}`);
+  } finally {
+    await rm(stage, { recursive: true, force: true });
+  }
+}

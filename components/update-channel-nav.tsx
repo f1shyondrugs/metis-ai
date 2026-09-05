@@ -322,7 +322,7 @@ export function UpdateSettingsPanel({
       const response = await fetch("/api/admin/system/update", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ action: "activate", channel, tag: state?.latestTag }),
+        body: JSON.stringify({ action: "activate", channel, tag: channel === "releases" ? state?.latestTag : undefined }),
       });
       const raw = await response.text();
       let result: { error?: string; message?: string } = {};
@@ -385,9 +385,9 @@ export function UpdateSettingsPanel({
           </p>
         </div>
       </div>
-      {available && channel === "releases" ? (
+      {available && (channel === "releases" || channel === "commits") ? (
         <div className="flex flex-wrap items-center gap-2">
-          {installerUrl ? (
+          {channel === "releases" && installerUrl ? (
             <a
               href={installerUrl}
               target="_blank"
@@ -416,7 +416,7 @@ export function UpdateSettingsPanel({
         {schedule?.nextRunAt ? <p className="text-xs text-muted-foreground">Next check: {new Date(schedule.nextRunAt).toLocaleString()}</p> : null}
       </div>
       {available && channel === "commits" ? (
-        <p className="text-xs text-muted-foreground">Commit updates are check-only and are not installed automatically because they may be buggy or broken.</p>
+        <p className="text-xs text-muted-foreground">This builds the current master commit in the inactive slot, then activates it after the build succeeds. Master commits may be buggy or broken.</p>
       ) : null}
     </div>
   );
