@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { GitBranch, LoaderCircle, RefreshCw } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
+import { toast } from "sonner";
 
 type UpdateChannel = "releases" | "commits";
 type UpdateState = {
@@ -87,6 +88,11 @@ type UpdateSettingsState = {
   currentManifest?: { version?: string; tag?: string | null; channel?: string };
 };
 
+type UpdateScheduleState = {
+  schedule?: { enabled?: boolean; time?: string; timezone?: string };
+  nextRunAt?: string | null;
+};
+
 type UpdateJobState = {
   status?: "preparing" | "ready" | "failed";
   result?: { tag?: string; preparedSlot?: string };
@@ -142,6 +148,35 @@ export function UpdateSettingsPanel({
   const [prepared, setPrepared] = useState(false);
   const [installerUrl, setInstallerUrl] = useState<string | null>(null);
   const [message, setMessage] = useState("");
+  const [schedule, setSchedule] = useState<UpdateScheduleState | null>(null);
+  const [scheduleTime, setScheduleTime] = useState("03:00");
+  const [scheduleTimezone, setScheduleTimezone] = useState("UTC");
+
+  useEffect(() => {
+    if (!isHostAdmin) return;
+    let active = true;
+    const loadSchedule = async () => {
+      const response = await fetch("/api/admin/system/update-schedule", { cache: "no-store" });
+      const next = (await response.json().catch(() => ({}))) as UpdateScheduleState;
+      if (!active) return;
+      setSchedule(next);
+      setScheduleTime(next.schedule?.time || "03:00");
+      setScheduleTimezone(next.schedule?.timezone || Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC");
+    };
+    void loadSchedule().catch(() => undefined);
+    const timer = window.setInterval(() => void loadSchedule().catch(() => undefined), 30_000);
+    return () => { active = false; window.clearInterval(timer); };
+  }, [isHostAdmin]);
+
+  useEffect(() => {
+    if (!schedule?.nextRunAt) return;
+    const target = new Date(schedule.nextRunAt).getTime();
+    const timers = [10, 5, 1].map((minutes) => {
+      const delay = target - Date.now() - minutes * 60_000;
+      return window.setTimeout(() => toast.info(`Automatic update in ${minutes} minute${minutes === 1 ? "" : "s"}.`), Math.max(0, delay));
+    });
+    return () => timers.forEach((timer) => window.clearTimeout(timer));
+  }, [schedule?.nextRunAt]);
 
   useEffect(() => {
     const savedJobId = window.localStorage.getItem(UPDATE_JOB_STORAGE_KEY);
@@ -214,6 +249,19 @@ export function UpdateSettingsPanel({
       window.clearInterval(timer);
     };
   }, [jobId]);
+
+  async function saveSchedule(enabled: boolean) {
+    try {
+      const response = await fetch("/api/admin/system/update-schedule", {
+        method: "PUT", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ enabled, time: scheduleTime, timezone: scheduleTimezone }),
+      });
+      const next = (await response.json().catch(() => ({}))) as UpdateScheduleState & { error?: string };
+      if (!response.ok) throw new Error(next.error || "Could not save automatic update schedule.");
+      setSchedule(next);
+      toast.success(enabled ? `Automatic updates scheduled for ${scheduleTime}.` : "Automatic updates disabled.");
+    } catch (error) { toast.error(error instanceof Error ? error.message : "Could not save automatic update schedule."); }
+  }
 
   async function prepareUpdate() {
     setBusy(true);
@@ -344,6 +392,18 @@ export function UpdateSettingsPanel({
         </div>
       ) : null}
       {message ? <p className="text-xs text-muted-foreground" role="status">{message}</p> : null}
+      <div className="space-y-3 border-t border-border/60 pt-5">
+        <div>
+          <h4 className="text-sm font-medium">Automatic updates</h4>
+          <p className="mt-1 text-xs text-muted-foreground">Check stable releases daily and prepare them at a time you choose. Metis announces 10, 5 and 1 minute before the update.</p>
+        </div>
+        <div className="flex flex-wrap items-end gap-3">
+          <label className="text-xs font-medium">Time<input type="time" value={scheduleTime} onChange={(event) => setScheduleTime(event.target.value)} className="mt-1 block h-9 rounded-md border border-input bg-background px-2 text-sm" /></label>
+          <label className="text-xs font-medium">Timezone<input value={scheduleTimezone} onChange={(event) => setScheduleTimezone(event.target.value)} className="mt-1 block h-9 w-48 rounded-md border border-input bg-background px-2 text-sm" /></label>
+          <Button type="button" size="sm" onClick={() => void saveSchedule(!(schedule?.schedule?.enabled))}>{schedule?.schedule?.enabled ? "Disable automatic updates" : "Enable automatic updates"}</Button>
+        </div>
+        {schedule?.nextRunAt ? <p className="text-xs text-muted-foreground">Next check: {new Date(schedule.nextRunAt).toLocaleString()}</p> : null}
+      </div>
       {available && channel === "commits" ? (
         <p className="text-xs text-muted-foreground">Commit updates are check-only and are not installed automatically because they may be buggy or broken.</p>
       ) : null}

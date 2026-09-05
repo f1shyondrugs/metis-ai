@@ -17,5 +17,6 @@ export async function GET() {
     return Response.json({ active: false }, { headers: { "Cache-Control": "no-store" } });
   }
 
-  return Response.json(state, { headers: { "Cache-Control": "no-store" } });
+  const job = getUpdateJob(state.jobId);
+  return Response.json({ ...state, logs: job?.logs || [] }, { headers: { "Cache-Control": "no-store" } });
 }

@@ -1887,7 +1887,7 @@ export default function AppShell({ defaultCwd }: { defaultCwd: string }) {
   const [modelsLoaded, setModelsLoaded] = useState(false);
   const [providerSetupOpen, setProviderSetupOpen] = useState(false);
   const [setupStatus, setSetupStatus] = useState<{ needed: boolean; hasUsers: boolean } | null>(null);
-  const [maintenanceState, setMaintenanceState] = useState<{ active?: boolean; reason?: string } | null>(null);
+  const [maintenanceState, setMaintenanceState] = useState<{ active?: boolean; reason?: string; logs?: string[] } | null>(null);
   const [modelSearch, setModelSearch] = useState("");
   const [modelSearchOpen, setModelSearchOpen] = useState(false);
   const [modelMenuOpen, setModelMenuOpen] = useState(false);
@@ -9025,7 +9025,7 @@ export default function AppShell({ defaultCwd }: { defaultCwd: string }) {
      const loadMaintenance = () => {
        void fetch("/api/system/maintenance", { cache: "no-store" })
          .then(async (response) => {
-           const body = (await response.json().catch(() => ({}))) as { active?: boolean; reason?: string };
+           const body = (await response.json().catch(() => ({}))) as { active?: boolean; reason?: string; logs?: string[] };
            if (active && response.ok) setMaintenanceState(body);
          })
          .catch(() => undefined);
@@ -9063,7 +9063,7 @@ export default function AppShell({ defaultCwd }: { defaultCwd: string }) {
    }, [authed]);
 
  if (maintenanceState?.active) {
-   return <MaintenanceScreen reason={maintenanceState.reason} />;
+   return <MaintenanceScreen reason={maintenanceState.reason} logs={maintenanceState.logs} />;
  }
 
  if (setupStatus?.needed) {

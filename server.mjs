@@ -24,6 +24,7 @@ const {
   attachRemoteClient,
 } = await import("./lib/remote-client-gateway.ts");
 const { logError } = await import("./lib/error-logs.ts");
+const { startUpdateScheduler } = await import("./lib/update-schedule.ts");
 
 const port = Number(process.env.PORT || 3100);
 const host = process.env.AI_CHAT_HOST?.trim() || "127.0.0.1";
@@ -342,6 +343,7 @@ remoteClientWebsocketServer.on("connection", (socket, request) => {
 });
 
 await nextApp.prepare();
+startUpdateScheduler();
 const server = http.createServer(async (request, response) => {
   try {
     const url = streamUrl(request);

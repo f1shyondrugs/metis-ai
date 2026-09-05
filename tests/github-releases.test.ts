@@ -28,7 +28,7 @@ test("compares release versions instead of tag strings", () => {
   assert.equal(compareReleaseVersions("v1.2.4", "v1.2.3"), 1);
 });
 
-test("stable channel reports a release for a development checkout", async () => {
+test("stable channel does not report the same release for a development checkout", async () => {
   const root = await mkdtemp(`${os.tmpdir()}/metis-update-test-`);
   const previousDistDir = process.env.NEXT_DIST_DIR;
   try {
@@ -42,8 +42,8 @@ test("stable channel reports a release for a development checkout", async () => 
     const result = await checkForUpdate(root, async () => new Response(JSON.stringify({
       tag_name: "v1.0.0", name: "v1.0.0", draft: false, prerelease: false,
     }), { status: 200 }));
-    assert.equal(result.status, "available");
-    assert.equal(result.updateAvailable, true);
+    assert.equal(result.status, "up-to-date");
+    assert.equal(result.updateAvailable, false);
   } finally {
     if (previousDistDir === undefined) delete process.env.NEXT_DIST_DIR;
     else process.env.NEXT_DIST_DIR = previousDistDir;

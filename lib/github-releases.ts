@@ -180,7 +180,7 @@ export async function checkForUpdate(
   const release = await fetchLatestRelease(fetcher);
   const latestTag = normalizeReleaseTag(release.tag_name);
   if (!latestTag) throw new Error("Latest GitHub release has no valid SemVer tag.");
-  const updateAvailable = !currentManifest.isRelease || compareReleaseVersions(latestTag, currentManifest.version) > 0;
+  const updateAvailable = compareReleaseVersions(latestTag, currentManifest.version) > 0;
   return {
     channel,
     status: updateAvailable ? "available" : "up-to-date",
@@ -204,6 +204,7 @@ export async function prepareNativeReleaseUpdate(
   release: GithubRelease,
   activeSlot: ".next-a" | ".next-b",
   fetcher: typeof fetch = fetch,
+  logger?: (message: string) => void,
 ) {
   const asset = releaseBundleAsset(release);
   if (!asset) throw new Error("The latest release does not contain the required native bundle asset.");
@@ -213,8 +214,11 @@ export async function prepareNativeReleaseUpdate(
   const stage = await mkdtemp(path.join(os.tmpdir(), "metis-release-"));
   const archive = path.join(stage, asset.name);
   let operation = "starting native release update";
+  const log = (message: string) => logger?.(message);
+  log(operation);
   try {
     operation = "downloading the verified release bundle";
+    log(operation);
     const response = await fetcher(asset.browser_download_url, {
       headers: { "User-Agent": USER_AGENT, Accept: "application/octet-stream" },
       cache: "no-store",
@@ -223,16 +227,20 @@ export async function prepareNativeReleaseUpdate(
     await writeFile(archive, Buffer.from(await response.arrayBuffer()));
     const source = path.join(stage, "source");
     operation = "creating the temporary update workspace";
+    log(operation);
     await execFileAsync("mkdir", ["-p", source]);
     operation = "extracting the release bundle";
+    log(operation);
     await execFileAsync("tar", ["-xzf", archive, "-C", source, "--strip-components=1"], { timeout: 60_000 });
     operation = "installing locked release dependencies";
+    log(operation);
     await execFileAsync(process.env.PNPM_BIN || "pnpm", ["install", "--frozen-lockfile"], {
       cwd: source,
       timeout: 15 * 60_000,
       maxBuffer: 2 * 1024 * 1024,
     });
     operation = `building the inactive production slot ${inactiveSlot}`;
+    log(operation);
     await execFileAsync("bash", ["scripts/build-production-slot.sh", inactiveSlot], {
       cwd: source,
       env: {
@@ -247,6 +255,7 @@ export async function prepareNativeReleaseUpdate(
       maxBuffer: 2 * 1024 * 1024,
     });
     operation = `installing the prepared ${inactiveSlot} slot`;
+    log(operation);
     const preparedSlot = path.join(root, inactiveSlot);
     const incomingSlot = `${preparedSlot}.incoming`;
     await rm(incomingSlot, { recursive: true, force: true });
@@ -259,6 +268,7 @@ export async function prepareNativeReleaseUpdate(
     const stderr = error && typeof error === "object" && "stderr" in error
       ? String((error as { stderr?: unknown }).stderr || "").trim()
       : "";
+    log(`${operation} failed: ${message}`);
     throw new Error(`${operation} failed: ${message}${stderr ? ` — ${stderr.slice(-1200)}` : ""}`);
   } finally {
     await rm(stage, { recursive: true, force: true });
