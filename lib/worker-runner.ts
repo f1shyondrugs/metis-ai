@@ -459,14 +459,6 @@ function extractSuggestions(value: string) {
   };
 }
 
-function ensureRecommendationSuggestions(value: string) {
-  if (/```suggestions\s*\n/i.test(value)) return value;
-  if (!/(demo|stub|noch nicht|nicht produktiv|nicht angebunden|nicht konfiguriert|nicht implementiert|mock|placeholder)/i.test(value)) {
-    return value;
-  }
-  return `${value.trim()}\n\n\`\`\`suggestions\nConnect Resend => Configure Resend and implement a manual email preview.\nConnect real research => Replace demo data with real web search, sources, and error handling.\nMigrate database => Replace JSON storage with a persistent database and migration.\n\`\`\``;
-}
-
 function withTimeout<T>(promise: Promise<T>, timeoutMs: number, message: string) {
   let timer: ReturnType<typeof setTimeout> | undefined;
   return Promise.race([
@@ -1606,14 +1598,12 @@ export async function runQueuedJob(job: AgentJob) {
       });
     }
     checkpoint(true);
-    const resultError = result.status === "error"
+    let resultError = result.status === "error"
       ? result.error?.message || "Agent run failed."
       : undefined;
     if (!text && result.result && !resultError) text = String(result.result);
     if (!text && !resultError) {
-      text =
-        result.error?.message ||
-        "The agent completed without returning a textual response.";
+      resultError = result.error?.message || "Agent returned no textual response.";
     }
     if (text) {
       const chatBlocks = [...text.matchAll(/```chat(?:\s+title=(?:"([^"]+)"|'([^']+)'|([^\s]+)))?\s*\n([\s\S]*?)```/gi)];
@@ -1696,7 +1686,7 @@ export async function runQueuedJob(job: AgentJob) {
         .join("\n");
       text = [workspaceLinks, chatLinks, automationLinks].filter(Boolean).join("\n");
     }
-    const extractedSuggestions = extractSuggestions(ensureRecommendationSuggestions(text));
+    const extractedSuggestions = extractSuggestions(text);
     text = extractedSuggestions.text;
     if (!receivedTextDelta && text) {
       const lastPart = parts.at(-1);

@@ -352,8 +352,8 @@ export async function runAlternativeProviderJob(
       updateJob(job.id, { status: "cancelled" });
       return true;
     }
-    if (!text.trim())
-      text = "The provider completed without returning a textual response.";
+    // An empty provider response is kept empty. Do not fabricate assistant text;
+    // the caller can surface the actual run status and diagnostics.
     finalizeAlternativeTools(tools);
     if (
       modeById(job.modeId || chat.sessionState?.modeId).id === "plan" &&

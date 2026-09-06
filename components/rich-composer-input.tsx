@@ -140,7 +140,7 @@ export const RichComposerInput = forwardRef<HTMLDivElement, RichComposerInputPro
         aria-label={ariaLabel}
         data-placeholder={placeholder}
         className={cn(
-          "rich-composer-input min-h-9 max-h-[180px] flex-1 overflow-y-auto whitespace-pre-wrap rounded-none px-3 py-1.5 text-[15px] leading-6 outline-none",
+          "rich-composer-input min-h-9 max-h-[180px] flex-1 overflow-y-auto whitespace-pre-wrap rounded-none px-3 pt-1.5 pb-0.5 text-[15px] leading-6 outline-none",
           "focus-visible:ring-0",
           disabled && "pointer-events-none opacity-50",
           className,

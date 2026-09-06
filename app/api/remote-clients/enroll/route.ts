@@ -12,6 +12,7 @@ export async function POST(req: Request) {
     version?: unknown;
     hostname?: unknown;
     capabilities?: unknown;
+    permissionMode?: unknown;
   };
   if (typeof body.token !== "string" || !body.token.trim()) {
     return Response.json({ error: "Enrollment token is required" }, { status: 400 });
@@ -22,6 +23,7 @@ export async function POST(req: Request) {
     ...(typeof body.architecture === "string" ? { architecture: body.architecture } : {}),
     ...(typeof body.version === "string" ? { version: body.version } : {}),
     ...(typeof body.hostname === "string" ? { hostname: body.hostname } : {}),
+    permissionMode: body.permissionMode === "admin" ? "admin" : "user",
     capabilities: Array.isArray(body.capabilities)
       ? body.capabilities.filter((item): item is string => typeof item === "string")
       : [],

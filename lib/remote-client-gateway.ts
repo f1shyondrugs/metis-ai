@@ -106,7 +106,7 @@ export function requestRemoteClient(input: {
 }) {
   const client = getRemoteClient(input.clientId, input.ownerId);
   if (!client) throw new Error("Remote client not found");
-  const authorization = authorizeRemoteAction(client, input.action, typeof input.params?.command === "string" ? input.params.command : undefined);
+  const authorization = authorizeRemoteAction(client, input.action, input.params);
   if (!authorization.allowed) {
     appendRemoteAudit({
       ownerId: input.ownerId,

@@ -1346,7 +1346,7 @@ export function SettingsPanel({
               ]}
             />
           </div>
-          <TabsList className="hidden h-auto w-full shrink-0 flex-wrap justify-start gap-1.5 rounded-none border-b border-border bg-muted/20 px-4 py-3 md:flex md:h-full md:min-h-0 md:flex-nowrap md:flex-col md:items-start md:justify-start md:overflow-y-auto md:border-b-0 md:border-r md:px-4 md:py-5">
+          <TabsList className="hidden h-auto w-full shrink-0 flex-wrap justify-start gap-1.5 rounded-none border-b border-border bg-muted/20 px-4 py-3 md:flex md:h-full md:min-h-0 md:flex-nowrap md:flex-col md:items-start md:justify-start md:overflow-y-auto md:border-b-0 md:border-r md:px-8 md:py-5">
            {SETTINGS_TABS.map((tab) => {
            const Icon =
            tab.value === "general" ? Settings2
@@ -1364,7 +1364,7 @@ export function SettingsPanel({
            <TabsTrigger
              value={tab.value}
              className={cn(
-               "min-h-10 justify-start px-3.5 py-2.5 md:h-auto md:w-full md:flex-none md:px-4",
+               "min-h-10 justify-start px-3.5 py-2.5 md:h-auto md:w-full md:flex-none md:!pl-6 md:!pr-6",
                tab.value === "updates" && updateAvailable && "border-emerald-500/40 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300",
              )}
            >

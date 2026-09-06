@@ -1,5 +1,6 @@
 import { createHash, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
 import { getDatabase, isSqliteBusyError, transaction } from "@/lib/sqlite";
+import { normalizePermissionMode, validateUserRemoteRequest, type RemotePermissionMode } from "@/lib/remote-security";
 
 export type RemotePolicyMode = "restricted" | "approval_required" | "full_access";
 export type RemoteClientStatus = "online" | "offline" | "revoked";
@@ -21,12 +22,12 @@ export type RemotePolicy = {
   allowlist: string[];
 };
 
-export const DEFAULT_REMOTE_POLICY: RemotePolicy = { mode: "full_access", allowlist: [] };
+export const DEFAULT_REMOTE_POLICY: RemotePolicy = { mode: "approval_required", allowlist: [] };
 
 export function normalizeRemotePolicy(policy?: Partial<RemotePolicy> | null): RemotePolicy {
   const allowlist = [...new Set((policy?.allowlist || []).map((item) => String(item).trim()).filter(Boolean))].slice(0, 100);
   return {
-    mode: policy?.mode === "restricted" ? "restricted" : "full_access",
+    mode: policy?.mode === "restricted" || policy?.mode === "approval_required" || policy?.mode === "full_access" ? policy.mode : "approval_required",
     allowlist,
   };
 }
@@ -42,6 +43,7 @@ export type RemoteClient = {
   hostname?: string;
   address?: string;
   capabilities: string[];
+  permissionMode: RemotePermissionMode;
   policy: RemotePolicy;
   lastSeenAt?: string;
   createdAt: string;
@@ -132,6 +134,7 @@ function mapClient(row: Record<string, unknown>): RemoteClient {
     ...(row.hostname ? { hostname: String(row.hostname) } : {}),
     ...(row.address ? { address: String(row.address) } : {}),
     capabilities: safeJson<string[]>(row.capabilities, []),
+    permissionMode: normalizePermissionMode(row.permissionMode),
     policy: normalizeRemotePolicy(safeJson<RemotePolicy>(row.policy, DEFAULT_REMOTE_POLICY)),
     ...(row.lastSeenAt ? { lastSeenAt: String(row.lastSeenAt) } : {}),
     createdAt: String(row.createdAt),
@@ -168,6 +171,7 @@ export function registerRemoteClient(token: string, input: {
   version?: string;
   hostname?: string;
   capabilities?: string[];
+  permissionMode?: RemotePermissionMode;
 }) {
   const enrollment = consumeEnrollmentToken(token);
   if (!enrollment) return null;
@@ -176,8 +180,8 @@ export function registerRemoteClient(token: string, input: {
   const now = iso();
   getDatabase().prepare(
     `INSERT INTO remote_clients
-      (id, owner_id, name, status, os, architecture, version, hostname, capabilities, policy, created_at, updated_at)
-     VALUES (?, ?, ?, 'offline', ?, ?, ?, ?, ?, ?, ?, ?)`,
+      (id, owner_id, name, status, os, architecture, version, hostname, capabilities, policy, permission_mode, created_at, updated_at)
+     VALUES (?, ?, ?, 'offline', ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   ).run(
     id,
     enrollment.ownerId,
@@ -188,6 +192,7 @@ export function registerRemoteClient(token: string, input: {
     input.hostname?.trim() || null,
     JSON.stringify(input.capabilities?.slice(0, 64) || []),
     JSON.stringify(DEFAULT_REMOTE_POLICY),
+    normalizePermissionMode(input.permissionMode),
     now,
     now,
   );
@@ -200,7 +205,7 @@ export function registerRemoteClient(token: string, input: {
 export function listRemoteClients(ownerId: string) {
   return (getDatabase().prepare(
     `SELECT id, owner_id as ownerId, name, status, os, architecture, version, hostname,
-            address, capabilities, policy, last_seen_at as lastSeenAt, created_at as createdAt,
+            address, capabilities, policy, permission_mode as permissionMode, last_seen_at as lastSeenAt, created_at as createdAt,
             updated_at as updatedAt, revoked_at as revokedAt
      FROM remote_clients WHERE owner_id = ? ORDER BY updated_at DESC`,
   ).all(ownerId) as Array<Record<string, unknown>>).map(mapClient);
@@ -209,7 +214,7 @@ export function listRemoteClients(ownerId: string) {
 export function getRemoteClient(id: string, ownerId?: string) {
   const row = getDatabase().prepare(
     `SELECT id, owner_id as ownerId, name, status, os, architecture, version, hostname,
-            address, capabilities, policy, last_seen_at as lastSeenAt, created_at as createdAt,
+            address, capabilities, policy, permission_mode as permissionMode, last_seen_at as lastSeenAt, created_at as createdAt,
             updated_at as updatedAt, revoked_at as revokedAt
      FROM remote_clients WHERE id = ? AND (? IS NULL OR owner_id = ?)`,
   ).get(id, ownerId ?? null, ownerId ?? null) as Record<string, unknown> | undefined;
@@ -303,11 +308,18 @@ export function deleteRemoteClient(id: string, ownerId: string) {
   return changed.changes > 0;
 }
 
-export function authorizeRemoteAction(client: RemoteClient, action: RemoteAction, command?: string) {
+export function authorizeRemoteAction(client: RemoteClient, action: RemoteAction, commandOrParams?: string | Record<string, unknown>) {
+  const params = typeof commandOrParams === "string" ? { command: commandOrParams } : (commandOrParams || {});
+  const command = typeof params.command === "string" ? params.command : undefined;
   if (client.status === "revoked") return { allowed: false, requiresApproval: false, reason: "Client is revoked" };
-  const mode = client.policy.mode === "restricted" ? "restricted" : "full_access";
-  if (mode === "full_access") return { allowed: true, requiresApproval: false };
+  const mode = client.policy.mode;
+  const safety = validateUserRemoteRequest(action, params);
+  if (client.permissionMode === "user" && !safety.allowed) return { allowed: false, requiresApproval: false, reason: safety.reason };
   const mutatesFiles = action === "write_file" || action === "edit_file" || action === "delete_file";
+  if (client.permissionMode === "user" && action === "execute_command" && !client.policy.allowlist.some((entry) => (command || "").trim() === entry || (command || "").trim().startsWith(`${entry} `))) {
+    return { allowed: false, requiresApproval: false, reason: "Befehl steht nicht auf der Benutzer-Allowlist" };
+  }
+  if (mode === "full_access" && client.permissionMode === "admin") return { allowed: true, requiresApproval: true, reason: "Administratoraktion benötigt Bestätigung" };
   if (mutatesFiles) {
     return { allowed: false, requiresApproval: false, reason: "File changes are disabled by the client restricted policy" };
   }
@@ -335,10 +347,9 @@ export function createRemoteApproval(input: {
   const authorization = authorizeRemoteAction(
     client,
     input.action,
-    typeof input.params?.command === "string" ? input.params.command : undefined,
+    input.params,
   );
   if (!authorization.allowed) throw new Error(authorization.reason || "Remote action denied");
-  if (!authorization.requiresApproval) throw new Error("Remote action does not require approval");
   const id = randomUUID();
   const createdAt = iso();
   const expiresAt = new Date(Date.now() + Math.max(5_000, Math.min(input.ttlMs || 5 * 60_000, 15 * 60_000))).toISOString();

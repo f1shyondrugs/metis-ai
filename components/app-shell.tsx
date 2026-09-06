@@ -8194,7 +8194,7 @@ export default function AppShell({ defaultCwd }: { defaultCwd: string }) {
         onDragLeave={onComposerDragLeave}
         onDrop={onComposerDrop}
         className={cn(
-          "relative flex w-full flex-col gap-1.5 rounded-[1.25rem] bg-muted/20 p-1.5 ring-1 ring-inset ring-border/30 transition-[background-color,box-shadow] focus-within:bg-muted/25 focus-within:ring-border/45",
+          "relative flex w-full flex-col justify-center gap-1.5 rounded-[1.25rem] bg-muted/20 p-1.5 ring-1 ring-inset ring-border/30 transition-[background-color,box-shadow] focus-within:bg-muted/25 focus-within:ring-border/45",
           !composerMultiline && "composer-single-line",
           dragOver && "bg-muted/40 ring-foreground/30",
         )}
@@ -8438,7 +8438,7 @@ export default function AppShell({ defaultCwd }: { defaultCwd: string }) {
             variant="ghost"
             size="icon"
             aria-label={voiceRecording || voiceState === "permission" || voiceState === "uploading" || voiceState === "transcribing" ? "Cancel voice input" : "Attach files"}
-            className="size-11 shrink-0 self-end rounded-full sm:size-9"
+            className="size-11 shrink-0 self-end rounded-full p-0 leading-none sm:size-9"
             onClick={() => {
               if (voiceRecording || voiceState === "permission" || voiceState === "uploading" || voiceState === "transcribing") {
                 resetVoiceComposer();
@@ -8483,7 +8483,7 @@ export default function AppShell({ defaultCwd }: { defaultCwd: string }) {
             size="icon"
             disabled={voiceState === "permission" || voiceState === "uploading" || voiceState === "transcribing" ? true : !canSend && !busy && !voiceRecording}
             aria-label={voiceRecording ? "Stop recording" : voiceState === "permission" || voiceState === "uploading" || voiceState === "transcribing" ? "Transcribing voice input" : busy && !canSend ? "Stop agent" : busy ? "Queue message" : "Send"}
-            className="size-11 shrink-0 self-end rounded-full sm:size-9"
+            className="size-11 shrink-0 self-end rounded-full p-0 leading-none sm:size-9"
             onClick={
               voiceRecording
                 ? () => setVoiceStopSignal((current) => current + 1)

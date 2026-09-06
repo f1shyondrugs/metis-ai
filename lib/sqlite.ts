@@ -475,7 +475,8 @@ export function getDatabase(): DatabaseSync {
       hostname TEXT,
       address TEXT,
       capabilities TEXT NOT NULL DEFAULT '[]',
-      policy TEXT NOT NULL DEFAULT '{"mode":"full_access","allowlist":[]}',
+      policy TEXT NOT NULL DEFAULT '{"mode":"approval_required","allowlist":[]}',
+      permission_mode TEXT NOT NULL DEFAULT 'user' CHECK (permission_mode IN ('user', 'admin')),
       last_seen_at TEXT,
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL,
@@ -565,6 +566,7 @@ export function getDatabase(): DatabaseSync {
     "ALTER TABLE automation_runs ADD COLUMN trigger_type TEXT NOT NULL DEFAULT 'scheduled'",
     "ALTER TABLE provider_models ADD COLUMN context_window INTEGER",
     "ALTER TABLE users ADD COLUMN is_admin INTEGER NOT NULL DEFAULT 0",
+    "ALTER TABLE remote_clients ADD COLUMN permission_mode TEXT NOT NULL DEFAULT 'user'",
     "ALTER TABLE automation_runs ADD COLUMN manual INTEGER NOT NULL DEFAULT 0",
   ]) {
     try {
@@ -585,8 +587,8 @@ export function getDatabase(): DatabaseSync {
   try {
     database.prepare(
       `UPDATE remote_clients
-       SET policy = json_set(policy, '$.mode', 'full_access')
-       WHERE json_extract(policy, '$.mode') = 'approval_required'`,
+       SET policy = json_set(policy, '$.mode', 'approval_required')
+       WHERE json_extract(policy, '$.mode') = 'full_access'`,
     ).run();
   } catch {
     // JSON1 is always present on supported Node SQLite builds; ignore if the table is mid-migration.

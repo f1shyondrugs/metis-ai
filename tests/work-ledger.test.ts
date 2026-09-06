@@ -83,7 +83,14 @@ type Line = { jsonrpc: string; id?: number; result?: unknown; error?: unknown };
 function startGateway() {
   const child = spawn("node", ["--experimental-vm-modules", "lib/internal-mcp-server.mjs"], {
     cwd: process.cwd(),
-    env: { ...process.env, AI_CHAT_INTERNAL_ORIGIN: "http://127.0.0.1:4000" },
+    env: {
+      ...process.env,
+      AI_CHAT_INTERNAL_ORIGIN: "http://127.0.0.1:4000",
+      MCP_AGENT_CWD: process.cwd(),
+      MCP_OS_UID: String(process.getuid?.() ?? 0),
+      MCP_OS_GID: String(process.getgid?.() ?? 0),
+      MCP_ALLOW_ROOT_AGENTS: "1",
+    },
     stdio: ["pipe", "pipe", "pipe"],
   });
   let buf = "";

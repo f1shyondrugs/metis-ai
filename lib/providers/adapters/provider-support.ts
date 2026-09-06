@@ -359,7 +359,7 @@ export function chatToModelMessages(
     const tools = message.tools || [];
     if (!content && !tools.length) continue;
     if (message.role === "user") {
-      messages.push({ role: "user", content: content || "respond." });
+      if (content) messages.push({ role: "user", content });
       continue;
     }
     if (!tools.length) {
@@ -450,8 +450,8 @@ export function modelMessages(
   onCompaction?: (event: CompactionEvent) => void,
 ): ModelMessage[] {
   const messages = chatToModelMessages(chat);
-  if (!messages.some((message) => message.role === "user")) {
-    messages.push({ role: "user", content: job.message || "respond." });
+  if (!messages.some((message) => message.role === "user") && job.message?.trim()) {
+    messages.push({ role: "user", content: job.message.trim() });
   }
   return compactIfNeeded(
     messages,
