@@ -9872,9 +9872,9 @@ export default function AppShell({ defaultCwd }: { defaultCwd: string }) {
                               )}
                             >
                               {m.streaming ? (
-                                <StreamingMarkdown content={displayContent} />
+                                <StreamingMarkdown content={displayContent} thinkingDurationMs={m.thinkingDurationMs} />
                               ) : (
-                                <Markdown content={displayContent} />
+                                <Markdown content={displayContent} thinkingDurationMs={m.thinkingDurationMs} />
                               )}
                             </div>
                           );

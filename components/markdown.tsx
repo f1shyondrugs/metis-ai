@@ -17,6 +17,7 @@ import "katex/dist/katex.min.css";
 import "highlight.js/styles/github-dark.css";
 import { normalizeMath, splitStreamingMath } from "@/lib/math";
 import { LinkPreview } from "@/components/link-preview";
+import { ThinkingBlock } from "@/components/thinking-block";
 import { MermaidDiagram } from "@/components/mermaid-diagram";
 import { isMermaidSource, wrapBareMermaid } from "@/lib/mermaid";
 import { ExternalLink, Link2 } from "lucide-react";
@@ -152,6 +153,47 @@ function MarkdownLink({
 
 const markdownComponents = { a: MarkdownLink };
 
+export interface ThinkingSegment {
+  kind: "text" | "thinking";
+  text: string;
+  complete?: boolean;
+}
+
+export function splitThinkingBlocks(content: string): ThinkingSegment[] {
+  const tagPattern = /<\/?thinking\s*>/gi;
+  const segments: ThinkingSegment[] = [];
+  let cursor = 0;
+  let mode: ThinkingSegment["kind"] = "text";
+  let thinkingStart = -1;
+
+  for (const match of content.matchAll(tagPattern)) {
+    const index = match.index ?? 0;
+    const tag = match[0];
+    const isClosing = tag.startsWith("</");
+
+    if (mode === "text" && !isClosing) {
+      if (index > cursor) segments.push({ kind: "text", text: content.slice(cursor, index) });
+      mode = "thinking";
+      thinkingStart = index + tag.length;
+      cursor = thinkingStart;
+    } else if (mode === "thinking" && isClosing) {
+      if (index > thinkingStart) {
+        segments.push({ kind: "thinking", text: content.slice(thinkingStart, index), complete: true });
+      }
+      mode = "text";
+      cursor = index + tag.length;
+    }
+  }
+
+  if (mode === "thinking") {
+    segments.push({ kind: "thinking", text: content.slice(thinkingStart), complete: false });
+  } else if (cursor < content.length || segments.length === 0) {
+    segments.push({ kind: "text", text: content.slice(cursor) });
+  }
+
+  return segments.filter((segment) => segment.text.length > 0 || segment.kind === "thinking");
+}
+
 function transformMarkdownUrl(url: string) {
   if (/^(workspace|note|subagent|automation):\/\//i.test(url)) return url;
   return defaultUrlTransform(url);
@@ -247,11 +289,39 @@ export const Markdown = memo(function Markdown({
   content,
   streaming = false,
   interactiveTasks = false,
+  thinkingDurationMs,
 }: {
   content: string;
   streaming?: boolean;
   interactiveTasks?: boolean;
+  thinkingDurationMs?: number;
 }) {
+  const thinkingSegments = splitThinkingBlocks(content);
+  if (thinkingSegments.some((segment) => segment.kind === "thinking")) {
+    return (
+      <div className="markdown-body">
+        {thinkingSegments.map((segment, index) =>
+          segment.kind === "thinking" ? (
+            <ThinkingBlock
+              key={`thinking-${index}`}
+              text={segment.text}
+              done={Boolean(segment.complete)}
+              durationMs={thinkingDurationMs}
+            />
+          ) : segment.text ? (
+            <Markdown
+              key={`text-${index}`}
+              content={segment.text}
+              streaming={streaming}
+              interactiveTasks={interactiveTasks}
+              thinkingDurationMs={thinkingDurationMs}
+            />
+          ) : null,
+        )}
+      </div>
+    );
+  }
+
   const markdownComponentsWithCode = {
     ...markdownComponents,
     code: CodeBlock,
@@ -300,6 +370,12 @@ export const Markdown = memo(function Markdown({
   );
 });
 
-export const StreamingMarkdown = memo(function StreamingMarkdown({ content }: { content: string }) {
-  return <Markdown content={content} streaming />;
+export const StreamingMarkdown = memo(function StreamingMarkdown({
+  content,
+  thinkingDurationMs,
+}: {
+  content: string;
+  thinkingDurationMs?: number;
+}) {
+  return <Markdown content={content} streaming thinkingDurationMs={thinkingDurationMs} />;
 });
