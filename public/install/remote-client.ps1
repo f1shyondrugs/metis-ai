@@ -5,6 +5,27 @@ param(
   [string]$InstallDir = "$env:LOCALAPPDATA\MetisAI\RemoteClient"
 )
 $ErrorActionPreference = 'Stop'
+
+function Refresh-ProcessPath {
+  $machinePath = [Environment]::GetEnvironmentVariable('Path', 'Machine')
+  $userPath = [Environment]::GetEnvironmentVariable('Path', 'User')
+  $env:Path = "$machinePath;$userPath"
+}
+
+$nodeCommand = Get-Command node.exe -ErrorAction SilentlyContinue
+if (-not $nodeCommand -or [int]((& node.exe -p 'process.versions.node.split(".")[0]') -as [int]) -lt 20) {
+  $winget = Get-Command winget.exe -ErrorAction SilentlyContinue
+  if (-not $winget) {
+    throw 'Node.js 20 or newer is required. Install it from https://nodejs.org/ and run this installer again.'
+  }
+  Write-Host 'Installing Node.js 22 LTS with winget...'
+  & $winget.Source install --id OpenJS.NodeJS.LTS --exact --silent --accept-package-agreements --accept-source-agreements
+  if ($LASTEXITCODE -ne 0) { throw "Node.js installation failed with exit code $LASTEXITCODE" }
+  Refresh-ProcessPath
+  $nodeCommand = Get-Command node.exe -ErrorAction SilentlyContinue
+  if (-not $nodeCommand) { throw 'Node.js was installed but is not available in this session. Restart PowerShell and run the installer again.' }
+}
+
 if ($PermissionMode -eq 'admin' -and (-not ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator))) {
   Write-Host 'Administrator mode requires a UAC-confirmed installation.'
   $args = "-NoProfile -ExecutionPolicy Bypass -File `"$PSCommandPath`" -Server `"$Server`" -EnrollmentToken `"$EnrollmentToken`" -PermissionMode admin -InstallDir `"$InstallDir`""
@@ -18,6 +39,23 @@ $result = Invoke-RestMethod -Uri "$($Server.TrimEnd('/'))/api/remote-clients/enr
 $config = @{ server=$Server.TrimEnd('/'); permissionMode=$PermissionMode; clientId=$result.client.id; credential=$result.credential } | ConvertTo-Json
 $configPath = Join-Path $InstallDir 'config.json'; Set-Content $configPath $config -Encoding utf8
 Invoke-WebRequest "$($Server.TrimEnd('/'))/install/remote-client.mjs" -OutFile (Join-Path $InstallDir 'client.mjs')
-Set-Content (Join-Path $InstallDir 'run-client.cmd') "@echo off`r`nnode `"%~dp0client.mjs`" --config `"%~dp0config.json`"" -Encoding ascii
+Invoke-WebRequest "$($Server.TrimEnd('/'))/install/remote-client-uninstall.ps1" -OutFile (Join-Path $InstallDir 'uninstall.ps1')
+
+Push-Location $InstallDir
+try {
+  if (-not (Test-Path (Join-Path $InstallDir 'package.json'))) { & npm.cmd init -y | Out-Null }
+  & npm.cmd install --omit=dev --no-audit --no-fund ws | Out-Null
+  if ($LASTEXITCODE -ne 0) { throw "Installing the WebSocket dependency failed with exit code $LASTEXITCODE" }
+} finally {
+  Pop-Location
+}
+
+$runCommand = "@echo off`r`nnode `"%~dp0client.mjs`" --config `"%~dp0config.json`""
+Set-Content (Join-Path $InstallDir 'run-client.cmd') $runCommand -Encoding ascii
+$taskName = 'Metis AI Remote Client'
+$nodePath = (Get-Command node.exe).Source
+$taskCommand = "`"$nodePath`" `"$(Join-Path $InstallDir 'client.mjs')`" --config `"$configPath`""
+& schtasks.exe /Create /SC ONLOGON /TN $taskName /TR $taskCommand /F | Out-Null
+Start-Process -FilePath $nodePath -ArgumentList @((Join-Path $InstallDir 'client.mjs'), '--config', $configPath) -WorkingDirectory $InstallDir
 if ($PermissionMode -eq 'admin') { Write-Warning 'Administrator mode enables only server-approved capabilities; it does not grant implicit elevation.' }
-Write-Host "Metis AI remote client installed in $PermissionMode mode at $InstallDir"
+Write-Host "Metis AI remote client installed and started in $PermissionMode mode at $InstallDir"

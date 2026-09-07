@@ -1004,6 +1004,13 @@ function extractMessageSources(message: Msg): SourceLink[] {
   return [...sources.values()].slice(0, 12);
 }
 
+function stripInlineThinkingBlocks(content: string) {
+  return content
+    .replace(/<thinking\s*>[\s\S]*?(?:<\/thinking\s*>|$)/gi, "")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
+
 function stripAssistantControlBlocks(content: string) {
   return stripTranscriptDump(content)
     .replace(/```sources\s*[\s\S]*?```/gi, "")
@@ -9736,6 +9743,7 @@ export default function AppShell({ defaultCwd }: { defaultCwd: string }) {
                           ? m.parts
                           : partsFromFlat(m);
                           const viewBlocks = layoutAssistantParts(messageParts);
+                          const hasNativeThinking = messageParts.some((part) => part.type === "thinking");
                           const lastBlockIndex = viewBlocks.length - 1;
                           const fileLinks = detectedFileLinks(m.content).filter(
                             (href) => !m.attachments?.some(
@@ -9860,7 +9868,9 @@ export default function AppShell({ defaultCwd }: { defaultCwd: string }) {
                               />
                             );
                           }
-                          const displayContent = stripAssistantControlBlocks(block.content);
+                          const displayContent = stripAssistantControlBlocks(
+                            hasNativeThinking ? stripInlineThinkingBlocks(block.content) : block.content,
+                          );
                           const hasLaterActivity = blocks.slice(bi + 1).some((candidate) => candidate.type !== "text");
                           return (
                             <div

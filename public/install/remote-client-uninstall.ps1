@@ -2,6 +2,7 @@ param(
   [string]$InstallDir = (Split-Path -Parent $MyInvocation.MyCommand.Path)
 )
 $ErrorActionPreference = "Stop"
+& schtasks.exe /Delete /TN "Metis AI Remote Client" /F 2>$null | Out-Null
 $runKey = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Run"
 Remove-ItemProperty -Path $runKey -Name "Metis AI Remote Client" -ErrorAction SilentlyContinue
 $resolvedDir = (Resolve-Path $InstallDir).Path
