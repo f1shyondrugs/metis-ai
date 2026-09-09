@@ -28,6 +28,14 @@ test("cursor tool updates accept flat and nested SDK payload shapes", () => {
   assert.match(source, /toolCall \\|\\| update\\.tool_call/);
 });
 
+test("tool responses finalize adapters that incorrectly keep a running status", () => {
+  const source = readFileSync(path.join(root, "lib", "worker-runner.ts"), "utf8");
+  assert.match(source, /toolResult !== undefined && isActiveToolStatus\(reportedToolStatus\)/);
+  assert.match(source, /\? "completed"/);
+  const chip = readFileSync(path.join(root, "components", "tool-call-chip.tsx"), "utf8");
+  assert.match(chip, /isToolRunning\(status\) && result === undefined/);
+});
+
 test("xAI provider path exposes live web search tools", () => {
   const source = readFileSync(path.join(root, "lib", "providers", "adapters", "provider-support.ts"), "utf8");
   assert.match(source, /tools\.webSearch|tools\.web_search/);
@@ -58,6 +66,16 @@ test("workspace creation schemas require real content and worker loads deploy ov
   assert.match(canvas, /content: \{ type: "string", minLength: 1 \}/);
   assert.match(canvas, /required: \["content"\]/);
   assert.match(workerUnit, /EnvironmentFile=-YOUR_INSTALL_DIR\/.deploy\.env/);
+});
+
+test("completed runs hand the durable queue back to the server scheduler", () => {
+  const jobs = readFileSync(path.join(root, "lib", "db-jobs.ts"), "utf8");
+  const worker = readFileSync(path.join(root, "lib", "worker-runner.ts"), "utf8");
+  const provider = readFileSync(path.join(root, "lib", "providers", "runner.ts"), "utf8");
+  assert.match(jobs, /export function drainNextQueuedMessage/);
+  assert.match(jobs, /claimQueuedMessageInTransaction/);
+  assert.match(worker, /drainNextQueuedMessage\(job\.chatId, job\.userId\)/);
+  assert.match(provider, /drainNextQueuedMessage\(job\.chatId, job\.userId\)/);
 });
 
 test("terminal events and chat state commit before the worker lease is released", () => {

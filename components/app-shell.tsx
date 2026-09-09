@@ -5304,12 +5304,29 @@ export default function AppShell({ defaultCwd }: { defaultCwd: string }) {
       if (!stickToBottomRef.current && !enteringChatRef.current) return;
       el.scrollTop = el.scrollHeight;
     };
+    const suspendAutoScrollOnWheel = (event: WheelEvent) => {
+      if (enteringChatRef.current || event.deltaY >= 0) return;
+      stickToBottomRef.current = false;
+      setShowScrollDown(true);
+    };
+    const suspendAutoScrollOnTouch = () => {
+      if (enteringChatRef.current) return;
+      const distanceFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
+      if (distanceFromBottom >= 80) {
+        stickToBottomRef.current = false;
+        setShowScrollDown(true);
+      }
+    };
+    el.addEventListener("wheel", suspendAutoScrollOnWheel, { passive: true });
+    el.addEventListener("touchmove", suspendAutoScrollOnTouch, { passive: true });
     const observer = new ResizeObserver(pinIfStuckToBottom);
     if (inner) observer.observe(inner);
     observer.observe(el);
     const frame = window.requestAnimationFrame(pinIfStuckToBottom);
     return () => {
       el.removeEventListener("scroll", updateScrollState);
+      el.removeEventListener("wheel", suspendAutoScrollOnWheel);
+      el.removeEventListener("touchmove", suspendAutoScrollOnTouch);
       observer.disconnect();
       window.cancelAnimationFrame(frame);
     };
@@ -8445,7 +8462,7 @@ export default function AppShell({ defaultCwd }: { defaultCwd: string }) {
             variant="ghost"
             size="icon"
             aria-label={voiceRecording || voiceState === "permission" || voiceState === "uploading" || voiceState === "transcribing" ? "Cancel voice input" : "Attach files"}
-            className="size-11 shrink-0 self-end rounded-full p-0 leading-none sm:size-9"
+            className="size-11 shrink-0 self-end rounded-full sm:size-9"
             onClick={() => {
               if (voiceRecording || voiceState === "permission" || voiceState === "uploading" || voiceState === "transcribing") {
                 resetVoiceComposer();
@@ -8490,7 +8507,7 @@ export default function AppShell({ defaultCwd }: { defaultCwd: string }) {
             size="icon"
             disabled={voiceState === "permission" || voiceState === "uploading" || voiceState === "transcribing" ? true : !canSend && !busy && !voiceRecording}
             aria-label={voiceRecording ? "Stop recording" : voiceState === "permission" || voiceState === "uploading" || voiceState === "transcribing" ? "Transcribing voice input" : busy && !canSend ? "Stop agent" : busy ? "Queue message" : "Send"}
-            className="size-11 shrink-0 self-end rounded-full p-0 leading-none sm:size-9"
+            className="size-11 shrink-0 self-end rounded-full sm:size-9"
             onClick={
               voiceRecording
                 ? () => setVoiceStopSignal((current) => current + 1)

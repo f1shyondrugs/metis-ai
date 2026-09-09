@@ -372,7 +372,10 @@ export const ToolCallChip = memo(function ToolCallChip({
   source,
 }: ToolCallProps) {
   const [userOpen, setUserOpen] = useState<boolean | null>(null);
-  const running = isToolRunning(status);
+  // A few adapters deliver the result while leaving the lifecycle status at
+  // "running". The result is terminal evidence, so never keep the spinner in
+  // that case (including an intentionally empty response).
+  const running = isToolRunning(status) && result === undefined;
   const expanded = locked ? autoExpand : userOpen ?? autoExpand;
   const display = enrichToolDisplay({ name, input, result, kind });
   const todoItems = todos?.length ? todos : display.todos;

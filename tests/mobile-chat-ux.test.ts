@@ -54,6 +54,14 @@ test("legacy Codex diagnostic rows are hidden from existing chat history", () =>
   assert.match(shell, /visibleTools = \(m\.tools \|\| \[\]\)\.filter\(\(tool\) => !isLegacyCodexNoiseTool\(tool\)\)/);
 });
 
+test("manual upward scrolling disables streaming auto-pin", () => {
+  assert.match(shell, /suspendAutoScrollOnWheel = \(event: WheelEvent\)/);
+  assert.match(shell, /event\.deltaY >= 0/);
+  assert.match(shell, /stickToBottomRef\.current = false/);
+  assert.match(shell, /el\.addEventListener\("wheel", suspendAutoScrollOnWheel/);
+  assert.match(shell, /el\.addEventListener\("touchmove", suspendAutoScrollOnTouch/);
+});
+
 test("opening a chat pins the transcript to the bottom and does not page history while pinning", () => {
   assert.match(shell, /enteringChatRef\.current = true/);
   assert.match(shell, /if \(el\.scrollTop < 80 && !nearBottom\) void loadEarlierMessages\(\)/);

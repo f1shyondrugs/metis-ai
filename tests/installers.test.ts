@@ -103,6 +103,17 @@ test("windows bootstrap has no param\(\) so irm \| iex is valid", () => {
   assert.match(windows, /must be invoked with powershell -File/);
 });
 
+test("remote Windows client installer verifies Node safely and waits for authentication", () => {
+  const installer = readFileSync(path.join(installerDir, "remote-client.ps1"), "utf8");
+  const client = readFileSync(path.join(installerDir, "remote-client.mjs"), "utf8");
+  assert.match(installer, /parseInt\(process\.versions\.node, 10\)/);
+  assert.doesNotMatch(installer, /process\.versions\.node\.split\(\.\)/);
+  assert.match(installer, /did not confirm a connection/);
+  assert.match(installer, /\bauthenticated\b/);
+  assert.match(client, /message\.type === "authenticated"/);
+  assert.match(client, /log\("authenticated"/);
+});
+
 test("platform installers collect configuration before side effects and support dry-run", () => {
   for (const file of ["linux.sh", "macos.sh"]) {
     const content = readFileSync(path.join(root, "install", file), "utf8");

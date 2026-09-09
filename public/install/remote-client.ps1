@@ -13,7 +13,7 @@ function Refresh-ProcessPath {
 }
 
 $nodeCommand = Get-Command node.exe -ErrorAction SilentlyContinue
-if (-not $nodeCommand -or [int]((& node.exe -p 'process.versions.node.split(".")[0]') -as [int]) -lt 20) {
+if (-not $nodeCommand -or [int]((& node.exe -p 'parseInt(process.versions.node, 10)') -as [int]) -lt 20) {
   $winget = Get-Command winget.exe -ErrorAction SilentlyContinue
   if (-not $winget) {
     throw 'Node.js 20 or newer is required. Install it from https://nodejs.org/ and run this installer again.'
@@ -53,9 +53,19 @@ try {
 $runCommand = "@echo off`r`nnode `"%~dp0client.mjs`" --config `"%~dp0config.json`""
 Set-Content (Join-Path $InstallDir 'run-client.cmd') $runCommand -Encoding ascii
 $taskName = 'Metis AI Remote Client'
+$logPath = Join-Path $InstallDir 'client.log'
+Remove-Item $logPath -Force -ErrorAction SilentlyContinue
 $nodePath = (Get-Command node.exe).Source
 $taskCommand = "`"$nodePath`" `"$(Join-Path $InstallDir 'client.mjs')`" --config `"$configPath`""
 & schtasks.exe /Create /SC ONLOGON /TN $taskName /TR $taskCommand /F | Out-Null
 Start-Process -FilePath $nodePath -ArgumentList @((Join-Path $InstallDir 'client.mjs'), '--config', $configPath) -WorkingDirectory $InstallDir
+$connected = $false
+for ($attempt = 0; $attempt -lt 15 -and -not $connected; $attempt++) {
+  Start-Sleep -Seconds 1
+  if (Test-Path $logPath) {
+    $connected = (Get-Content $logPath -Raw -ErrorAction SilentlyContinue) -match '\bauthenticated\b'
+  }
+}
+if (-not $connected) { throw "Remote client did not confirm a connection. Check $logPath" }
 if ($PermissionMode -eq 'admin') { Write-Warning 'Administrator mode enables only server-approved capabilities; it does not grant implicit elevation.' }
-Write-Host "Metis AI remote client installed and started in $PermissionMode mode at $InstallDir"
+Write-Host "Connection succeeded: Metis AI remote client is authenticated and running in $PermissionMode mode at $InstallDir"

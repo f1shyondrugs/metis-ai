@@ -879,6 +879,34 @@ export function removeQueuedMessage(chatId: string, messageId: string, ownerId?:
   });
 }
 
+export function claimQueuedMessageInTransaction(chatId: string, ownerId?: string) {
+  const chat = getChat(chatId, ownerId);
+  const message = chat?.queuedMessages?.[0];
+  if (!chat || !message) return null;
+  const next = { ...chat };
+  const remaining = chat.queuedMessages!.slice(1);
+  if (remaining.length) next.queuedMessages = remaining;
+  else delete next.queuedMessages;
+  next.messages = [
+    ...next.messages,
+    {
+      id: message.id,
+      role: "user",
+      content: message.text.trim() || (message.attachments?.length
+        ? `Attached ${message.attachments.length} file${message.attachments.length === 1 ? "" : "s"}`
+        : ""),
+      ...(message.referenceText ? { referenceText: message.referenceText } : {}),
+      ...(message.references?.length ? { references: message.references } : {}),
+      ...(message.attachments?.length ? { attachments: message.attachments } : {}),
+      createdAt: now(),
+    },
+  ];
+  next.runStatus = "running";
+  next.runUpdatedAt = now();
+  delete next.queueMessage;
+  return { chat: saveChatInternal(next), message };
+}
+
 export function listChatsWithQueuedMessages() {
   const rows = getDatabase().prepare(
     `SELECT data FROM chats

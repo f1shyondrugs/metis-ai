@@ -132,6 +132,10 @@ function connect() {
   socket.on("message", async (raw) => {
     let message;
     try { message = JSON.parse(raw.toString()); } catch { return; }
+    if (message.type === "authenticated") {
+      log("authenticated", message.clientId || "");
+      return;
+    }
     if (message.type === "heartbeat_ack") return;
     if (message.type !== "request" || typeof message.requestId !== "string") return;
     try {

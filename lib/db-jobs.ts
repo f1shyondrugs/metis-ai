@@ -7,7 +7,7 @@ import {
   withSqliteRetry,
 } from "@/lib/sqlite";
 import type { AgentJob, JobStatus } from "@/lib/jobs";
-import { updateChat } from "@/lib/db-store";
+import { claimQueuedMessageInTransaction, updateChat } from "@/lib/db-store";
 import {
   describeQueueWait,
   parseWorkerConcurrency,
@@ -139,14 +139,13 @@ export function serializeRunEventData(data: unknown) {
   return compacted;
 }
 
-export function enqueueJob(
+function enqueueJobInTransaction(
   input: Omit<
     AgentJob,
     "id" | "status" | "attempts" | "createdAt" | "updatedAt"
   >,
   options?: { beforeInsert?: () => void },
 ) {
-  return transaction(() => {
     if (input.messageId) {
       const existingRow = getDatabase()
         .prepare(
@@ -229,7 +228,38 @@ export function enqueueJob(
         job.status,
         now,
       );
-    return job;
+  return job;
+}
+
+export function enqueueJob(
+  input: Omit<
+    AgentJob,
+    "id" | "status" | "attempts" | "createdAt" | "updatedAt"
+  >,
+  options?: { beforeInsert?: () => void },
+) {
+  return transaction(() => enqueueJobInTransaction(input, options));
+}
+
+export function drainNextQueuedMessage(chatId: string, userId?: string) {
+  return transaction(() => {
+    const claimed = claimQueuedMessageInTransaction(chatId, userId);
+    if (!claimed) return null;
+    const { chat, message } = claimed;
+    return enqueueJobInTransaction({
+      chatId,
+      ...(userId ? { userId } : {}),
+      message: message.text.trim() || (message.attachments?.length ? `(see attachments)` : ""),
+      messageId: message.id,
+      ...(message.referenceText ? { referenceText: message.referenceText } : {}),
+      ...(message.references?.length ? { references: message.references } : {}),
+      ...(message.attachments?.length ? { attachments: message.attachments } : {}),
+      ...(chat.agentId ? { agentId: chat.agentId } : {}),
+      ...(chat.sessionState?.modeId ? { modeId: chat.sessionState.modeId } : {}),
+      ...(chat.modelId ? { modelId: chat.modelId } : {}),
+      ...(chat.modelParams?.length ? { modelParams: chat.modelParams } : {}),
+      ...(chat.incognito ? { incognito: true } : {}),
+    });
   });
 }
 

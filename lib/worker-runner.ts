@@ -15,7 +15,7 @@ import { skillsCatalogPrompt } from "@/lib/skills";
 import { autoSkillActivationPrompt } from "@/lib/skill-routing";
 import { getUserAgentCwd, getMcpServers } from "@/lib/mcp";
 import { resolveAgentPath } from "@/lib/revert";
-import { appendRunEvent, enqueueJob, getJob, touchJob, updateJob } from "@/lib/db-jobs";
+import { appendRunEvent, drainNextQueuedMessage, enqueueJob, getJob, touchJob, updateJob } from "@/lib/db-jobs";
 import { canonicalizeToolPart } from "@/lib/providers/tool-events";
 import { logError } from "@/lib/error-logs";
 import { isModelAllowed } from "@/lib/model-access";
@@ -1133,11 +1133,18 @@ export async function runQueuedJob(job: AgentJob) {
         (typeof normalized.name === "string" && normalized.name) ||
         existingTool?.name ||
         "tool";
-      const toolStatus =
-        (typeof rawToolEvent.status === "string" && rawToolEvent.status) ||
-        (eventType === "tool_result" || eventType === "tool-call-completed" ? "completed" : "running");
+      const reportedToolStatus = typeof rawToolEvent.status === "string" ? rawToolEvent.status : "";
       const toolArgs = normalized.args;
       const toolResult = normalized.result;
+      // Some SDK/MCP adapters keep the lifecycle status at "running" on the
+      // response event. A response is authoritative: never leave its card
+      // spinning just because the adapter forgot to emit a terminal status.
+      const toolStatus = toolResult !== undefined && isActiveToolStatus(reportedToolStatus)
+        ? "completed"
+        : reportedToolStatus ||
+          (eventType === "tool_result" || eventType === "tool-call-completed" || toolResult !== undefined
+            ? "completed"
+            : "running");
       const detail = toolDetailFromArgs(toolArgs) || existingTool?.detail;
       const subagent = extractSubagent(toolName, toolArgs, toolResult);
       let editArgs = toolArgs;
@@ -1773,6 +1780,26 @@ export async function runQueuedJob(job: AgentJob) {
       agentId: agent.agentId,
       ...(resultError ? { error: resultError } : {}),
     });
+    if (!resultError) {
+      try {
+        const queuedJob = drainNextQueuedMessage(job.chatId, job.userId);
+        if (queuedJob) {
+          appendRunEvent(job.id, job.chatId, job.userId, "status", {
+            status: "queued_next",
+            jobId: queuedJob.id,
+          });
+        }
+      } catch (error) {
+        void logError({
+          level: "warn",
+          source: "worker",
+          chatId: job.chatId,
+          userId: job.userId || undefined,
+          message: `Queued follow-up could not start automatically: ${error instanceof Error ? error.message : String(error)}`,
+          context: { jobId: job.id },
+        });
+      }
+    }
   if (!job.incognito && !chat.incognito) createSnapshot({
       chatId: job.chatId,
       ...(job.userId ? { ownerId: job.userId } : {}),
