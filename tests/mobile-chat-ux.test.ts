@@ -59,10 +59,20 @@ test("manual upward scrolling disables streaming auto-pin", () => {
   assert.match(shell, /event\.deltaY >= 0/);
   assert.match(shell, /userDetachedFromBottomRef\.current = true/);
   assert.match(shell, /stickToBottomRef\.current = false/);
-  assert.match(shell, /scrolledUp && !atBottom/);
+  assert.match(shell, /userScrollInputRef\.current && scrolledUp/);
+  assert.match(shell, /userScrollInputRef\.current && scrolledDown && atBottom/);
   assert.match(shell, /if \(userDetachedFromBottomRef\.current\) return/);
   assert.match(shell, /el\.addEventListener\("wheel", suspendAutoScrollOnWheel/);
   assert.match(shell, /el\.addEventListener\("touchmove", suspendAutoScrollOnTouch/);
+});
+
+test("opening a chat pins the transcript to the bottom and does not page history while pinning", () => {
+  assert.match(shell, /enteringChatRef\.current = true/);
+  assert.match(shell, /if \(!loadingChatId\) enteringChatRef\.current = false/);
+  assert.match(shell, /layoutResetToTop/);
+  assert.match(shell, /if \(el\.scrollTop < 80\) void loadEarlierMessages\(\)/);
+  assert.match(shell, /new ResizeObserver\(pinIfStuckToBottom\)/);
+  assert.match(shell, /if \(enteringChatRef\.current\) return/);
 });
 
 test("completed and stale historical subagents are not shown as still running", () => {
@@ -73,13 +83,6 @@ test("completed and stale historical subagents are not shown as still running", 
   assert.match(shell, /some\(\(part\) => part\.type === "tool" && isLiveTool\(part\)\)/);
   assert.match(shell, /aria-label=\{`Stop subagent \$\{tool\.subagent\.title \|\| tool\.name\}`\}/);
   assert.match(shell, /onClick=\{\(\) => void cancelSubagent\(tool\)\}/);
-});
-
-test("opening a chat pins the transcript to the bottom and does not page history while pinning", () => {
-  assert.match(shell, /enteringChatRef\.current = true/);
-  assert.match(shell, /if \(el\.scrollTop < 80 && !nearBottom\) void loadEarlierMessages\(\)/);
-  assert.match(shell, /new ResizeObserver\(pinIfStuckToBottom\)/);
-  assert.match(shell, /if \(enteringChatRef\.current\) return/);
 });
 
 test("mobile chat restore does not auto-open the workspace overlay", () => {
