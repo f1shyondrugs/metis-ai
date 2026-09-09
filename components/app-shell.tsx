@@ -5331,7 +5331,7 @@ export default function AppShell({ defaultCwd }: { defaultCwd: string }) {
       lastMessageScrollTopRef.current = el.scrollTop;
     };
     const detachFromBottom = () => {
-      if (enteringChatRef.current) return;
+      enteringChatRef.current = false;
       userDetachedFromBottomRef.current = true;
       stickToBottomRef.current = false;
       setShowScrollDown(true);
@@ -5345,15 +5345,6 @@ export default function AppShell({ defaultCwd }: { defaultCwd: string }) {
       const distance = distanceFromBottom();
       const atBottom = distance <= AT_BOTTOM_PX;
       const nearBottom = distance < SHOW_JUMP_PX;
-      if (enteringChatRef.current) {
-        attachToBottom();
-        pinIfStuckToBottom();
-        return;
-      }
-      if (isProgrammaticScroll()) {
-        lastMessageScrollTopRef.current = el.scrollTop;
-        return;
-      }
       const previousTop = lastMessageScrollTopRef.current;
       const scrolledUp = el.scrollTop + 1 < previousTop;
       const scrolledDown = el.scrollTop > previousTop + 1;
@@ -5368,6 +5359,19 @@ export default function AppShell({ defaultCwd }: { defaultCwd: string }) {
         pinIfStuckToBottom();
         return;
       }
+      if (scrolledUp && !layoutResetToTop) {
+        detachFromBottom();
+        if (el.scrollTop < 80) void loadEarlierMessages();
+        return;
+      }
+      if (enteringChatRef.current) {
+        attachToBottom();
+        pinIfStuckToBottom();
+        return;
+      }
+      if (isProgrammaticScroll()) {
+        return;
+      }
       if (userDetachedFromBottomRef.current) {
         if (userScrollInputRef.current && scrolledDown && atBottom) attachToBottom();
         else {
@@ -5375,11 +5379,6 @@ export default function AppShell({ defaultCwd }: { defaultCwd: string }) {
           setShowScrollDown(true);
           if (el.scrollTop < 80) void loadEarlierMessages();
         }
-        return;
-      }
-      if (userScrollInputRef.current && scrolledUp) {
-        detachFromBottom();
-        if (el.scrollTop < 80) void loadEarlierMessages();
         return;
       }
       if (atBottom) {
@@ -5394,12 +5393,11 @@ export default function AppShell({ defaultCwd }: { defaultCwd: string }) {
     };
     const suspendAutoScrollOnWheel = (event: WheelEvent) => {
       markUserScrollInput();
-      if (enteringChatRef.current || event.deltaY >= 0) return;
+      if (event.deltaY >= 0) return;
       detachFromBottom();
     };
     const suspendAutoScrollOnTouch = () => {
       markUserScrollInput();
-      if (enteringChatRef.current) return;
       if (distanceFromBottom() > AT_BOTTOM_PX) detachFromBottom();
     };
     const markPointerAsUserScroll = () => {

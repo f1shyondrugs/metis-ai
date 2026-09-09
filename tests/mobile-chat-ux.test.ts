@@ -59,7 +59,7 @@ test("manual upward scrolling disables streaming auto-pin", () => {
   assert.match(shell, /event\.deltaY >= 0/);
   assert.match(shell, /userDetachedFromBottomRef\.current = true/);
   assert.match(shell, /stickToBottomRef\.current = false/);
-  assert.match(shell, /userScrollInputRef\.current && scrolledUp/);
+  assert.match(shell, /scrolledUp && !layoutResetToTop/);
   assert.match(shell, /userScrollInputRef\.current && scrolledDown && atBottom/);
   assert.match(shell, /if \(userDetachedFromBottomRef\.current\) return/);
   assert.match(shell, /el\.addEventListener\("wheel", suspendAutoScrollOnWheel/);
