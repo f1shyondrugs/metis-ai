@@ -524,29 +524,6 @@
   background-clip: padding-box;
 }
 
-.composer-single-line {
-  min-height: 52px;
-}
-
-.composer-single-line .composer-input-area {
-  position: absolute;
-  right: 5.25rem;
-  bottom: 0.5rem;
-  left: 3rem;
-}
-
-@media (max-width: 639px) {
-  .composer-single-line {
-    min-height: 56px;
-  }
-
-  .composer-single-line .composer-input-area {
-    right: 6rem;
-    bottom: 0.625rem;
-    left: 3.5rem;
-  }
-}
-
 @keyframes caret-blink {
   0%,
   100% {

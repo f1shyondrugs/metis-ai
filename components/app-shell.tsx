@@ -8,6 +8,7 @@ import {
   KeyboardEvent,
   useCallback,
   useEffect,
+  useLayoutEffect,
   useRef,
   useState,
   type PointerEvent as ReactPointerEvent,
@@ -2043,7 +2044,6 @@ export default function AppShell({ defaultCwd }: { defaultCwd: string }) {
     });
   }, []);
   const busyRef = useRef(false);
-  const [composerMultiline, setComposerMultiline] = useState(false);
   const [references, setReferences] = useState<ReferenceItem[]>([]);
   const [referenceMenu, setReferenceMenu] = useState<{
     query: string;
@@ -5509,17 +5509,15 @@ export default function AppShell({ defaultCwd }: { defaultCwd: string }) {
     }, 400);
   }
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     const el = textareaRef.current;
     if (!el) return;
     const minPx = 36; // match send button size-9
     el.style.height = "auto";
-    setComposerMultiline((current) =>
-      input.trim()
-        ? current || input.includes("\n") || el.scrollHeight > minPx + 2
-        : false,
-    );
-    el.style.height = `${Math.min(Math.max(el.scrollHeight, minPx), 180)}px`;
+    el.style.overflowY = "hidden";
+    const nextHeight = Math.min(Math.max(el.scrollHeight, minPx), 180);
+    el.style.height = `${nextHeight}px`;
+    el.style.overflowY = nextHeight >= 180 ? "auto" : "hidden";
   }, [input]);
 
   useEffect(() => {
@@ -8326,7 +8324,6 @@ export default function AppShell({ defaultCwd }: { defaultCwd: string }) {
         onDrop={onComposerDrop}
         className={cn(
           "relative flex w-full flex-col justify-center gap-1.5 rounded-[1.25rem] bg-muted/20 p-1.5 ring-1 ring-inset ring-border/30 transition-[background-color,box-shadow] focus-within:bg-muted/25 focus-within:ring-border/45",
-          !composerMultiline && "composer-single-line",
           dragOver && "bg-muted/40 ring-foreground/30",
         )}
       >
@@ -8477,7 +8474,28 @@ export default function AppShell({ defaultCwd }: { defaultCwd: string }) {
             ))}
           </div>
         ) : null}
-        <div className="composer-input-area relative min-w-0">
+        <div className="flex w-full items-end gap-1">
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon"
+            aria-label={voiceRecording || voiceState === "permission" || voiceState === "uploading" || voiceState === "transcribing" ? "Cancel voice input" : "Attach files"}
+            className="size-11 shrink-0 self-end rounded-full sm:size-9"
+            onClick={() => {
+              if (voiceRecording || voiceState === "permission" || voiceState === "uploading" || voiceState === "transcribing") {
+                resetVoiceComposer();
+                return;
+              }
+              fileInputRef.current?.click();
+            }}
+          >
+            {voiceRecording || voiceState === "permission" || voiceState === "uploading" || voiceState === "transcribing" ? (
+              <X className="size-4" />
+            ) : (
+              <Plus className="size-4" />
+            )}
+          </Button>
+          <div className="composer-input-area relative min-w-0 flex-1">
           <RichComposerInput
             ref={textareaRef}
             value={input}
@@ -8563,28 +8581,6 @@ export default function AppShell({ defaultCwd }: { defaultCwd: string }) {
             </div>
           ) : null}
         </div>
-        <div className="flex w-full items-end gap-1">
-          <Button
-            type="button"
-            variant="ghost"
-            size="icon"
-            aria-label={voiceRecording || voiceState === "permission" || voiceState === "uploading" || voiceState === "transcribing" ? "Cancel voice input" : "Attach files"}
-            className="size-11 shrink-0 self-end rounded-full sm:size-9"
-            onClick={() => {
-              if (voiceRecording || voiceState === "permission" || voiceState === "uploading" || voiceState === "transcribing") {
-                resetVoiceComposer();
-                return;
-              }
-              fileInputRef.current?.click();
-            }}
-          >
-            {voiceRecording || voiceState === "permission" || voiceState === "uploading" || voiceState === "transcribing" ? (
-              <X className="size-4" />
-            ) : (
-              <Plus className="size-4" />
-            )}
-          </Button>
-          <span className="flex-1" />
           <VoiceInput
             chatId={activeChatId}
             enabled={voiceInputEnabled}

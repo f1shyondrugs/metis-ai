@@ -92,3 +92,11 @@ test("mobile chat restore does not auto-open the workspace overlay", () => {
   assert.match(shell, /if \(isMobileChatViewport\(\)\) \{[\s\S]*?setWorkspaceOpen\(false\);/);
   assert.match(shell, /if \(!isMobileChatViewport\(\)\) setWorkspaceOpen\(true\)/);
 });
+
+test("composer input stays in the action row so wrap width does not jump", () => {
+  assert.doesNotMatch(shell, /composer-single-line/);
+  assert.doesNotMatch(shell, /composerMultiline/);
+  assert.match(shell, /composer-input-area relative min-w-0 flex-1/);
+  assert.match(shell, /useLayoutEffect\(\(\) => \{[\s\S]*textareaRef\.current[\s\S]*el\.style\.height = "auto"/);
+  assert.match(shell, /el\.style\.overflowY = nextHeight >= 180 \? "auto" : "hidden"/);
+});
