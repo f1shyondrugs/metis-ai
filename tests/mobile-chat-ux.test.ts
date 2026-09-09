@@ -68,6 +68,8 @@ test("completed and stale historical subagents are not shown as still running", 
   assert.match(shell, /tool\.result === undefined && !isStaleHistoricalSubagent\(tool\)/);
   assert.match(shell, /const runningSubagents = subagentOutputs\.filter\(isLiveTool\)/);
   assert.match(shell, /some\(\(part\) => part\.type === "tool" && isLiveTool\(part\)\)/);
+  assert.match(shell, /aria-label=\{`Stop subagent \$\{tool\.subagent\.title \|\| tool\.name\}`\}/);
+  assert.match(shell, /onClick=\{\(\) => void cancelSubagent\(tool\)\}/);
 });
 
 test("opening a chat pins the transcript to the bottom and does not page history while pinning", () => {

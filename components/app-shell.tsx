@@ -6373,9 +6373,9 @@ export default function AppShell({ defaultCwd }: { defaultCwd: string }) {
     setWorkspaceOpen(true);
   }
 
-  async function cancelSubagent() {
-    const childChatId = selectedSubagent?.subagent?.chatId;
-    if (!childChatId || cancellingSubagent) return;
+  async function cancelSubagent(target: ActiveSubagent | null = selectedSubagent) {
+    const childChatId = target?.subagent?.chatId;
+    if (!target || !childChatId || cancellingSubagent) return;
     setCancellingSubagent(true);
     try {
       const response = await fetch("/api/chat/cancel", {
@@ -6385,11 +6385,11 @@ export default function AppShell({ defaultCwd }: { defaultCwd: string }) {
       });
       const data = (await response.json().catch(() => ({}))) as { error?: string };
       if (!response.ok) throw new Error(data.error || `HTTP ${response.status}`);
-      setActiveSubagent((current) => current ? { ...current, status: "cancelled" } : current);
+      setActiveSubagent((current) => current?.id === target.id ? { ...current, status: "cancelled" } : current);
       setMessages((current) => current.map((message) => ({
         ...message,
         parts: (message.parts ?? partsFromFlat(message)).map((part) =>
-          part.type === "tool" && part.id === selectedSubagent.id
+          part.type === "tool" && part.id === target.id
             ? { ...part, status: "cancelled" }
             : part,
         ),
@@ -10318,19 +10318,37 @@ export default function AppShell({ defaultCwd }: { defaultCwd: string }) {
                       {subagentsExpanded ? (
                         <div className="border-t border-border/50 px-2 py-1">
                           {runningSubagents.map((tool) => (
-                            <button
+                            <div
                               key={tool.id}
-                              type="button"
                               className={cn(
-                                "flex w-full min-w-0 items-center gap-2 rounded-lg px-2 py-1.5 text-left text-xs hover:bg-muted/40",
+                                "flex w-full min-w-0 items-center gap-1 rounded-lg px-2 py-1.5 text-left text-xs hover:bg-muted/40",
                                 selectedSubagent?.id === tool.id && "bg-muted/60",
                               )}
-                              onClick={() => setActiveSubagent(tool)}
                             >
-                              <LoaderCircle className="size-3 animate-spin text-muted-foreground" />
-                              <span className="min-w-0 flex-1 truncate">{tool.subagent?.title || tool.subagent?.prompt || tool.name}</span>
-                              {tool.subagent?.model ? <span className="max-w-28 shrink-0 truncate text-[10px] text-muted-foreground/70">{tool.subagent.model}</span> : null}
-                            </button>
+                              <button
+                                type="button"
+                                className="flex min-w-0 flex-1 items-center gap-2 text-left"
+                                onClick={() => setActiveSubagent(tool)}
+                              >
+                                <LoaderCircle className="size-3 animate-spin text-muted-foreground" />
+                                <span className="min-w-0 flex-1 truncate">{tool.subagent?.title || tool.subagent?.prompt || tool.name}</span>
+                                {tool.subagent?.model ? <span className="max-w-28 shrink-0 truncate text-[10px] text-muted-foreground/70">{tool.subagent.model}</span> : null}
+                              </button>
+                              {tool.subagent?.chatId ? (
+                                <Button
+                                  type="button"
+                                  size="icon-sm"
+                                  variant="ghost"
+                                  className="size-7 shrink-0 text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
+                                  aria-label={`Stop subagent ${tool.subagent.title || tool.name}`}
+                                  title="Stop subagent"
+                                  disabled={cancellingSubagent}
+                                  onClick={() => void cancelSubagent(tool)}
+                                >
+                                  <Square className="size-3.5" />
+                                </Button>
+                              ) : null}
+                            </div>
                           ))}
                         </div>
                       ) : null}
@@ -10815,26 +10833,43 @@ export default function AppShell({ defaultCwd }: { defaultCwd: string }) {
                     </div>
                     <div className="border-t border-border/50 px-2 py-1">
                       {runningSubagents.map((tool) => (
-                        <button
+                        <div
                           key={tool.id}
-                          type="button"
                           className={cn(
-                            "flex w-full min-w-0 items-center gap-2 rounded-lg px-2 py-1.5 text-left text-xs hover:bg-muted/40",
+                            "flex w-full min-w-0 items-center gap-1 rounded-lg px-2 py-1.5 text-left text-xs hover:bg-muted/40",
                             selectedSubagent?.id === tool.id && "bg-muted/60",
                           )}
-                          onClick={() => setActiveSubagent(tool)}
                         >
-                          <LoaderCircle className="size-3 animate-spin text-muted-foreground" />
-                          <span className="min-w-0 flex-1 truncate">
-                            {tool.subagent?.title || tool.subagent?.prompt || tool.name}
-                          </span>
-                          {tool.subagent?.model ? (
-                            <span className="max-w-28 shrink-0 truncate text-[10px] text-muted-foreground/70">
-                              {tool.subagent.model}
+                          <button
+                            type="button"
+                            className="flex min-w-0 flex-1 items-center gap-2 text-left"
+                            onClick={() => setActiveSubagent(tool)}
+                          >
+                            <LoaderCircle className="size-3 animate-spin text-muted-foreground" />
+                            <span className="min-w-0 flex-1 truncate">
+                              {tool.subagent?.title || tool.subagent?.prompt || tool.name}
                             </span>
+                            {tool.subagent?.model ? (
+                              <span className="max-w-28 shrink-0 truncate text-[10px] text-muted-foreground/70">
+                                {tool.subagent.model}
+                              </span>
+                            ) : null}
+                          </button>
+                          {tool.subagent?.chatId ? (
+                            <Button
+                              type="button"
+                              size="icon-sm"
+                              variant="ghost"
+                              className="size-7 shrink-0 text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
+                              aria-label={`Stop subagent ${tool.subagent.title || tool.name}`}
+                              title="Stop subagent"
+                              disabled={cancellingSubagent}
+                              onClick={() => void cancelSubagent(tool)}
+                            >
+                              <Square className="size-3.5" />
+                            </Button>
                           ) : null}
-                          
-                        </button>
+                        </div>
                       ))}
                     </div>
                   </section>
