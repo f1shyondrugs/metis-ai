@@ -62,8 +62,10 @@ test("manual upward scrolling disables streaming auto-pin", () => {
   assert.match(shell, /el\.addEventListener\("touchmove", suspendAutoScrollOnTouch/);
 });
 
-test("completed subagent results are not shown as still running", () => {
-  assert.match(shell, /const isLiveTool = \(tool: Pick<ToolPart, "status" \| "result">\) => isToolRunning\(tool\.status\) && tool\.result === undefined/);
+test("completed and stale historical subagents are not shown as still running", () => {
+  assert.match(shell, /sourceMessageIsLatestAssistant/);
+  assert.match(shell, /Date\.now\(\) - createdAt > 15 \* 60_000/);
+  assert.match(shell, /tool\.result === undefined && !isStaleHistoricalSubagent\(tool\)/);
   assert.match(shell, /const runningSubagents = subagentOutputs\.filter\(isLiveTool\)/);
   assert.match(shell, /some\(\(part\) => part\.type === "tool" && isLiveTool\(part\)\)/);
 });

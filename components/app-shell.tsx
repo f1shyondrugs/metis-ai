@@ -294,6 +294,8 @@ type ToolPart = {
   todos?: Array<{ id?: string; content: string; status?: string }>;
   input?: string;
   result?: string;
+  sourceMessageCreatedAt?: string;
+  sourceMessageIsLatestAssistant?: boolean;
   subagent?: {
     agentId?: string;
     chatId?: string;
@@ -2864,14 +2866,24 @@ export default function AppShell({ defaultCwd }: { defaultCwd: string }) {
       .filter((part): part is ToolMsgPart => part.type === "tool")
       .filter((part) => part.kind === "shell" || part.kind === "read" || part.kind === "edit"),
   );
+  const latestAssistantMessage = [...messages].reverse().find((message) => message.role === "assistant");
   const subagentOutputs = messages.flatMap((message) =>
     (message.parts ?? partsFromFlat(message))
       .filter((part): part is ToolMsgPart => part.type === "tool")
-      .filter((part) => part.kind === "subagent"),
+      .filter((part) => part.kind === "subagent")
+      .map((part) => ({
+        ...part,
+        sourceMessageCreatedAt: message.createdAt,
+        sourceMessageIsLatestAssistant: message.id === latestAssistantMessage?.id,
+      })),
   );
-  const isLiveTool = (tool: Pick<ToolPart, "status" | "result">) => isToolRunning(tool.status) && tool.result === undefined;
+  const isStaleHistoricalSubagent = (tool: Pick<ToolPart, "sourceMessageCreatedAt" | "sourceMessageIsLatestAssistant">) => {
+    const createdAt = Date.parse(tool.sourceMessageCreatedAt || "");
+    return !tool.sourceMessageIsLatestAssistant && Number.isFinite(createdAt) && Date.now() - createdAt > 15 * 60_000;
+  };
+  const isLiveTool = (tool: Pick<ToolPart, "status" | "result" | "sourceMessageCreatedAt" | "sourceMessageIsLatestAssistant">) =>
+    isToolRunning(tool.status) && tool.result === undefined && !isStaleHistoricalSubagent(tool);
   const runningSubagents = subagentOutputs.filter(isLiveTool);
-  const latestAssistantMessage = [...messages].reverse().find((message) => message.role === "assistant");
   const latestAssistantHasRunningTool = Boolean(
     latestAssistantMessage &&
       (latestAssistantMessage.parts ?? partsFromFlat(latestAssistantMessage))
