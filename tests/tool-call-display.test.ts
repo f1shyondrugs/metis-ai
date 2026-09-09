@@ -16,7 +16,7 @@ import {
   truncateToolText,
 } from "../lib/tool-call-display";
 
-type LayoutTool = { id: string; name?: string; kind?: string; status?: string; input?: string; todos?: Array<{ content: string }> };
+type LayoutTool = { id: string; callId?: string; name?: string; kind?: string; status?: string; input?: string; result?: string; todos?: Array<{ content: string }> };
 
 test("classifies system context compaction as a tool-like chip", () => {
  assert.equal(classifyToolKind("context_compaction"), "compaction");
@@ -263,6 +263,11 @@ test("toolCallHeadline includes read line ranges and grep patterns", () => {
   );
 });
 
+test("automation tools classify as standalone state surfaces", () => {
+  assert.equal(classifyToolKind("create_automation"), "automation");
+  assert.equal(classifyToolKind("call_mcp_tool", { toolName: "create_automation" }), "automation");
+});
+
 test("write_todos classifies as todo for the Tasks card", () => {
   assert.equal(classifyToolKind("write_todos"), "todo");
   assert.equal(classifyToolKind("updateTodos"), "todo");
@@ -384,6 +389,34 @@ test("layoutAssistantParts keeps todos visible outside the following tool activi
   if (blocks[1]?.type === "tools") {
     assert.deepEqual(blocks[1].tools.map((tool) => tool.name), ["read_file", "list_directory"]);
     assert.equal(blocks[1].thinking?.durationMs, 3000);
+  }
+});
+
+test("layoutAssistantParts keeps every created-entity embed outside read activity", () => {
+  const blocks = layoutAssistantParts<LayoutTool>([
+    { type: "tool", id: "plan", name: "create_plan", kind: "plan", status: "completed", input: "plan" },
+    { type: "tool", id: "automation", name: "create_automation", kind: "automation", status: "completed" },
+    { type: "tool", id: "canvas", name: "create_canvas", kind: "canvas", status: "completed", input: "canvas" },
+    { type: "tool", id: "note", name: "create_note", kind: "note", status: "completed" },
+    { type: "tool", id: "read", name: "read_file", kind: "read", status: "completed" },
+  ]);
+  assert.deepEqual(
+    blocks.map((block) => block.type === "tools" ? block.tools.map((tool) => tool.kind) : []),
+    [["plan"], ["automation"], ["canvas"], ["note"], ["read"]],
+  );
+});
+
+test("layoutAssistantParts merges live and snapshot copies by call id", () => {
+  const blocks = layoutAssistantParts<LayoutTool>([
+    { type: "tool", id: "live", callId: "call-1", name: "read_file", kind: "read", status: "running", input: '{"path":"README.md"}' },
+    { type: "tool", id: "snapshot", callId: "call-1", name: "read_file", kind: "read", status: "completed", input: '{"path":"README.md"}', result: "done" },
+  ]);
+  assert.equal(blocks.length, 1);
+  assert.equal(blocks[0]?.type, "tools");
+  if (blocks[0]?.type === "tools") {
+    assert.equal(blocks[0].tools.length, 1);
+    assert.equal(blocks[0].tools[0]?.status, "completed");
+    assert.equal(blocks[0].tools[0]?.result, "done");
   }
 });
 

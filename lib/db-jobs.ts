@@ -243,6 +243,13 @@ export function enqueueJob(
 
 export function drainNextQueuedMessage(chatId: string, userId?: string) {
   return transaction(() => {
+    // Occupancy is per chat, not per user. A userId filter here lets a second
+    // drain start while another owner/null-user job is already live.
+    if (getActiveParentJob(chatId)) {
+      const error = new Error("This chat already has an active run.");
+      error.name = "ActiveChatRun";
+      throw error;
+    }
     const claimed = claimQueuedMessageInTransaction(chatId, userId);
     if (!claimed) return null;
     const { chat, message } = claimed;
@@ -391,6 +398,24 @@ export function claimNextJob(
              CASE WHEN json_valid(data) THEN CAST(json_extract(data, '$.priority') AS INTEGER) END,
              100
            ) >= 50
+         )
+         AND (
+           (
+             json_valid(data)
+             AND json_extract(data, '$.parentJobId') IS NOT NULL
+             AND json_extract(data, '$.parentJobId') != ''
+           )
+           OR NOT EXISTS (
+             SELECT 1 FROM jobs AS other
+             WHERE other.chat_id = jobs.chat_id
+               AND other.id != jobs.id
+               AND other.status IN ('running', 'switching', 'waiting_input', 'waiting_for_user')
+               AND json_valid(other.data)
+               AND (
+                 json_extract(other.data, '$.parentJobId') IS NULL
+                 OR json_extract(other.data, '$.parentJobId') = ''
+               )
+           )
          )
        ORDER BY COALESCE(
                   CASE WHEN json_valid(data) THEN CAST(json_extract(data, '$.priority') AS INTEGER) END,

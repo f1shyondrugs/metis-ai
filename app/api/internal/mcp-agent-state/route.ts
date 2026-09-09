@@ -1,5 +1,6 @@
-import { appendRunEvent, getJob, listChildJobs, listRunEvents, updateJob } from "@/lib/db-jobs";
-import { getChat, updateChat } from "@/lib/db-store";
+import { runAgentTimedWait } from "@/lib/agent-wait";
+import { getJob, listChildJobs, listRunEvents } from "@/lib/db-jobs";
+import { getChat } from "@/lib/db-store";
 import { bearerTokenMatches } from "@/lib/security";
 
 export const runtime = "nodejs";
@@ -104,16 +105,21 @@ export async function POST(req: Request) {
       : presetMs;
     if (!requestedMs) return Response.json({ error: "duration must be 10s, 60s, 5m, or durationMs" }, { status: 400 });
     const waitMs = Math.min(MAX_WAIT_MS, Math.max(1_000, requestedMs));
-    const waitingUntil = new Date(Date.now() + waitMs).toISOString();
-    updateJob(jobId, { status: "waiting_input" });
-    updateChat(chatId, { runStatus: "waiting_input", runUpdatedAt: new Date().toISOString() }, userId);
-    appendRunEvent(jobId, chatId, userId, "status", { status: "waiting_input", waitingUntil, durationMs: waitMs, reason: body.reason });
-    await sleep(waitMs);
-    const current = updateJob(jobId, { status: "running" });
-    if (!current || current.status !== "running") throw new Error("The agent wait was cancelled.");
-    updateChat(chatId, { runStatus: "running", runUpdatedAt: new Date().toISOString() }, userId);
-    appendRunEvent(jobId, chatId, userId, "status", { status: "running", reason: "Agent wait finished." });
-    return Response.json({ waitedMs: waitMs, waitingUntil });
+    const reason = typeof body.reason === "string" ? body.reason.trim().slice(0, 500) : undefined;
+    try {
+      return Response.json(await runAgentTimedWait({
+        jobId,
+        chatId,
+        userId,
+        waitMs,
+        reason,
+      }));
+    } catch (error) {
+      return Response.json(
+        { error: error instanceof Error ? error.message : "The agent wait was cancelled." },
+        { status: 409 },
+      );
+    }
   }
 
   if (body.action !== "status") return Response.json({ error: "Unknown action" }, { status: 400 });

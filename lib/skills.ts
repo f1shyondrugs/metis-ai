@@ -12,6 +12,13 @@ export type SkillRecord = {
  computedHash: string;
 };
 
+export type SkillSettingsView = SkillRecord & {
+ title: string;
+ description: string;
+ enabled: boolean;
+ alwaysOn: boolean;
+};
+
 type SkillsLock = {
  version?: number;
  skills?: Record<string, {
@@ -21,6 +28,8 @@ type SkillsLock = {
  computedHash?: string;
  }>;
 };
+
+export const DEFAULT_ALWAYS_ON_SKILL_IDS = ["i-have-adhd"] as const;
 
 function lockPath() {
  return path.join(config.root, "skills-lock.json");
@@ -41,6 +50,18 @@ function resolvedSkillPath(id: string, configuredPath: string) {
  if (existsSync(absolute)) return path.relative(root, absolute);
  }
  return configuredPath;
+}
+
+export function parseSkillFrontmatter(content: string) {
+ const fence = content.match(/^---\r?\n([\s\S]*?)\r?\n---/);
+ if (!fence) return { title: "", description: "" };
+ const block = fence[1];
+ const nameMatch = block.match(/^name:\s*(?:['"]([^'"]+)['"]|(\S+))/m);
+ const title = (nameMatch?.[1] || nameMatch?.[2] || "").trim();
+ const quoted = block.match(/^description:\s*(['"])([\s\S]*?)\1\s*$/m);
+ const plain = block.match(/^description:\s*(.+)$/m);
+ const description = (quoted?.[2] || (!quoted ? plain?.[1] : "") || "").replace(/\s+/g, " ").trim();
+ return { title, description };
 }
 
 export function listInstalledSkills(): SkillRecord[] {
@@ -64,6 +85,12 @@ export function skillEnabled(id: string, settings?: GlobalModelSettings) {
  return flags[id] !== false;
 }
 
+export function isAlwaysOnSkill(id: string, settings?: GlobalModelSettings) {
+ const flags = settings?.alwaysOnSkills;
+ if (flags && id in flags) return flags[id] !== false;
+ return (DEFAULT_ALWAYS_ON_SKILL_IDS as readonly string[]).includes(id);
+}
+
 export function enabledSkills(settings?: GlobalModelSettings): SkillRecord[] {
  return listInstalledSkills().filter((skill) => skillEnabled(skill.id, settings));
 }
@@ -76,6 +103,19 @@ export function readSkillMarkdown(id: string) {
  } catch {
  return null;
  }
+}
+
+export function listSkillSettings(settings?: GlobalModelSettings): SkillSettingsView[] {
+ return listInstalledSkills().map((skill) => {
+ const meta = parseSkillFrontmatter(readSkillMarkdown(skill.id) || "");
+ return {
+ ...skill,
+ title: meta.title || skill.id,
+ description: meta.description,
+ enabled: skillEnabled(skill.id, settings),
+ alwaysOn: isAlwaysOnSkill(skill.id, settings),
+ };
+ });
 }
 
 export function addManualSkill(id: string, content: string): SkillRecord {
@@ -107,10 +147,25 @@ export function addManualSkill(id: string, content: string): SkillRecord {
 }
 
 export function skillsCatalogPrompt(settings?: GlobalModelSettings) {
- const skills = enabledSkills(settings);
+ const skills = enabledSkills(settings).filter((skill) => !isAlwaysOnSkill(skill.id, settings));
  if (!skills.length) return "";
  return [
  "Installed skills (enabled in Settings → Agent → Skills). Read a listed SKILL.md with the read_file tool when the task matches; do not invent skills that are not listed.",
  skills.map((skill) => `- ${skill.id} (${skill.source}): ${skill.skillPath}`).join("\n"),
  ].join("\n");
+}
+
+export function alwaysOnSkillsPrompt(settings?: GlobalModelSettings) {
+ const skills = enabledSkills(settings).filter((skill) => isAlwaysOnSkill(skill.id, settings));
+ if (!skills.length) return "";
+ return skills.map((skill) => {
+ const content = readSkillMarkdown(skill.id)?.trim();
+ if (!content) return "";
+ return [
+ `Always-on skill ${skill.id} is active for every response in this run.`,
+ "Treat the rules below as already loaded; do not spend a tool call re-reading this SKILL.md unless asked.",
+ "To disable always-on, turn it off for this skill in Settings → Agent → Skills.",
+ content,
+ ].join("\n");
+ }).filter(Boolean).join("\n\n");
 }

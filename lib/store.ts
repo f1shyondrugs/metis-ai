@@ -545,6 +545,7 @@ export type GlobalModelSettings = {
   };
   customModes?: AgentMode[];
   enabledSkills?: Record<string, boolean>;
+  alwaysOnSkills?: Record<string, boolean>;
 };
 
 function ensureDirs() {

@@ -1,7 +1,7 @@
 "use client";
 
 import { ArrowLeft, Bot, CircleStop, Clock3, LoaderCircle } from "lucide-react";
-import { useEffect, useState, type CSSProperties } from "react";
+import { useEffect, useRef, useState, type CSSProperties } from "react";
 import type { ToolPart } from "@/lib/store";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
@@ -18,6 +18,8 @@ type Props = {
   sidebarWidth?: number;
 };
 
+const EXIT_MS = 200;
+
 function promptText(tool: ToolPart): string {
   const raw = tool.subagent?.prompt || tool.input || "";
   return stripTranscriptDump(typeof raw === "string" ? raw : "");
@@ -25,6 +27,20 @@ function promptText(tool: ToolPart): string {
 
 export function SubagentChatView({ tool, onBack, onCancel, cancelling = false, sidebarWidth = 0 }: Props) {
   const [liveTool, setLiveTool] = useState<ToolPart | null>(null);
+  const [leaving, setLeaving] = useState(false);
+  const onBackRef = useRef(onBack);
+  onBackRef.current = onBack;
+
+  const requestClose = () => {
+    if (leaving) return;
+    setLeaving(true);
+  };
+
+  useEffect(() => {
+    if (!leaving) return;
+    const timer = window.setTimeout(() => onBackRef.current(), EXIT_MS);
+    return () => window.clearTimeout(timer);
+  }, [leaving]);
 
   useEffect(() => {
     const childChatId = tool.subagent?.chatId;
@@ -102,12 +118,17 @@ export function SubagentChatView({ tool, onBack, onCancel, cancelling = false, s
 
   return (
     <section
-      className="fixed inset-y-0 right-0 z-50 flex min-h-0 w-full animate-in fade-in slide-in-from-right-2 flex-col bg-background duration-200 md:w-[calc(100%-var(--subagent-sidebar-width))]"
+      className={cn(
+        "fixed inset-y-0 right-0 z-50 flex min-h-0 w-full flex-col bg-background duration-200 md:w-[calc(100%-var(--subagent-sidebar-width))]",
+        leaving
+          ? "pointer-events-none animate-out fade-out slide-out-to-right-2 fill-mode-forwards"
+          : "animate-in fade-in slide-in-from-right-2",
+      )}
       style={{ "--subagent-sidebar-width": `${sidebarWidth}px` } as CSSProperties}
       aria-label="Subagent chat"
     >
       <header className="flex h-12 shrink-0 items-center gap-2 border-b border-border/55 bg-background px-3 md:px-4">
-        <Button type="button" variant="ghost" size="icon" className="size-8" onClick={onBack} aria-label="Back to chat" title="Back to chat">
+        <Button type="button" variant="ghost" size="icon" className="size-8" onClick={requestClose} aria-label="Back to chat" title="Back to chat">
           <ArrowLeft className="size-4" />
         </Button>
         <p className="min-w-0 flex-1 truncate text-sm font-medium text-foreground" title={title}>{title}</p>

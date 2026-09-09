@@ -459,13 +459,20 @@ export function SettingsPanel({
   const [deletingMemoryIds, setDeletingMemoryIds] = useState<Set<string>>(
     () => new Set(),
   );
-  const [browserStorage, setBrowserStorage] = useState<Array<{
+  type BrowserStorageItem = {
     origin: string;
     storageTypes: string[];
     lastAccess?: string;
-    sizeBytes: null;
-  }>>([]);
+    sizeBytes: number;
+    cookies: Array<{ name: string; domain: string; path: string; expires: number; size: number }>;
+    localStorage: Array<{ key: string; value: string }>;
+    sessionStorage: Array<{ key: string; value: string }>;
+  };
+  const [browserStorage, setBrowserStorage] = useState<BrowserStorageItem[]>([]);
   const [browserStorageLoading, setBrowserStorageLoading] = useState(false);
+  const [expandedBrowserOrigin, setExpandedBrowserOrigin] = useState<string | null>(null);
+  const [browserStorageDraft, setBrowserStorageDraft] = useState({ type: "cookie" as "cookie" | "localStorage" | "sessionStorage", name: "", value: "" });
+  const [browserStorageSaving, setBrowserStorageSaving] = useState(false);
   const [browserStorageError, setBrowserStorageError] = useState("");
   const [browserStorageDeleteTarget, setBrowserStorageDeleteTarget] = useState<string | null>(null);
   const [browserStorageClearAll, setBrowserStorageClearAll] = useState(false);
@@ -557,6 +564,27 @@ export function SettingsPanel({
       setBrowserStorageLoading(false);
     }
   }, []);
+
+  const createBrowserStorage = useCallback(async (origin: string) => {
+    if (!browserStorageDraft.name.trim()) return;
+    setBrowserStorageSaving(true);
+    try {
+      const response = await fetch("/api/browser/storage", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ origin, ...browserStorageDraft, name: browserStorageDraft.name.trim() }),
+      });
+      const data = (await response.json().catch(() => ({}))) as { error?: string };
+      if (!response.ok) throw new Error(data.error || "Could not create browser storage entry");
+      setBrowserStorageDraft((current) => ({ ...current, name: "", value: "" }));
+      toast.success("Storage entry created");
+      await loadBrowserStorage();
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Could not create browser storage entry");
+    } finally {
+      setBrowserStorageSaving(false);
+    }
+  }, [browserStorageDraft, loadBrowserStorage]);
 
   const clearBrowserStorage = useCallback(async (origin?: string) => {
     const response = await fetch("/api/browser/storage", {
@@ -1438,20 +1466,76 @@ export function SettingsPanel({
  <p className="rounded-md border border-border/60 p-4 text-xs text-muted-foreground">No websites match that search.</p>
  ) : null}
  <div className="min-h-0 flex-1 space-y-2 overflow-y-auto">
- {filteredBrowserStorage.map((item) => (
- <div key={item.origin} className="flex items-center justify-between gap-3 rounded-md border border-border/60 p-3">
- <div className="min-w-0">
- <p className="truncate text-sm">{item.origin}</p>
- <p className="mt-1 text-[11px] text-muted-foreground">
- {item.storageTypes.join(" · ")}
- {item.sizeBytes === null ? " · size unavailable" : ` · ${item.sizeBytes} bytes`}
- </p>
- </div>
- <Button type="button" variant="outline" size="sm" onClick={() => setBrowserStorageDeleteTarget(item.origin)}>
- Clear
- </Button>
- </div>
- ))}
+ {filteredBrowserStorage.map((item) => {
+   const expanded = expandedBrowserOrigin === item.origin;
+   return (
+   <div key={item.origin} className="rounded-md border border-border/60">
+     <div className="flex items-center gap-3 p-3">
+       <button
+         type="button"
+         className="flex min-w-0 flex-1 items-start gap-2 text-left"
+         aria-expanded={expanded}
+         onClick={() => setExpandedBrowserOrigin(expanded ? null : item.origin)}
+       >
+         <ChevronDown className={cn("mt-0.5 size-4 shrink-0 transition-transform", !expanded && "-rotate-90")} />
+         <span className="min-w-0">
+           <span className="block truncate text-sm">{item.origin}</span>
+           <span className="mt-1 block text-[11px] text-muted-foreground">
+             {item.storageTypes.join(" · ")} · {item.sizeBytes.toLocaleString()} bytes
+           </span>
+         </span>
+       </button>
+       <Button type="button" variant="outline" size="sm" onClick={() => setBrowserStorageDeleteTarget(item.origin)}>
+         Clear
+       </Button>
+     </div>
+     {expanded ? (
+       <div className="space-y-4 border-t border-border/60 bg-muted/10 p-3">
+         <div className="space-y-2">
+           <p className="text-xs font-medium">Cookies</p>
+           {item.cookies.length ? item.cookies.map((cookie) => (
+             <div key={`${cookie.domain}:${cookie.path}:${cookie.name}`} className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1 text-xs">
+               <span className="font-medium">{cookie.name}</span>
+               <span className="text-muted-foreground">{cookie.domain}{cookie.path} · {cookie.size} bytes</span>
+             </div>
+           )) : <p className="text-xs text-muted-foreground">No cookies.</p>}
+         </div>
+         {(["localStorage", "sessionStorage"] as const).map((storageType) => (
+           <div key={storageType} className="space-y-2">
+             <p className="text-xs font-medium">{storageType}</p>
+             {item[storageType].length ? item[storageType].map((entry) => (
+               <div key={entry.key} className="grid gap-1 text-xs sm:grid-cols-[minmax(8rem,0.35fr)_minmax(0,1fr)]">
+                 <span className="font-medium break-all">{entry.key}</span>
+                 <span className="break-all text-muted-foreground">{entry.value}</span>
+               </div>
+             )) : <p className="text-xs text-muted-foreground">No entries available for an open page.</p>}
+           </div>
+         ))}
+         <form className="space-y-2 border-t border-border/60 pt-3" onSubmit={(event) => { event.preventDefault(); void createBrowserStorage(item.origin); }}>
+           <p className="text-xs font-medium">Add entry</p>
+           <div className="grid gap-2 sm:grid-cols-[10rem_minmax(0,1fr)]">
+             <select
+               value={browserStorageDraft.type}
+               onChange={(event) => setBrowserStorageDraft((current) => ({ ...current, type: event.target.value as typeof current.type }))}
+               className="h-9 rounded-md border border-input bg-background px-3 text-sm"
+               aria-label="Storage entry type"
+             >
+               <option value="cookie">Cookie</option>
+               <option value="localStorage">localStorage</option>
+               <option value="sessionStorage">sessionStorage</option>
+             </select>
+             <Input value={browserStorageDraft.name} onChange={(event) => setBrowserStorageDraft((current) => ({ ...current, name: event.target.value }))} placeholder="Name or key" aria-label="Storage entry name" />
+           </div>
+           <Input value={browserStorageDraft.value} onChange={(event) => setBrowserStorageDraft((current) => ({ ...current, value: event.target.value }))} placeholder="Value" aria-label="Storage entry value" />
+           <Button type="submit" size="sm" disabled={browserStorageSaving || !browserStorageDraft.name.trim()}>
+             {browserStorageSaving ? "Adding…" : "Add entry"}
+           </Button>
+         </form>
+       </div>
+     ) : null}
+   </div>
+   );
+ })}
  </div>
  </div>
  ) : (

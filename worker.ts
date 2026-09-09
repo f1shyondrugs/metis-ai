@@ -14,6 +14,7 @@ import {
 } from "@/lib/automations";
 import { parseWorkerConcurrency, waitForSchedulerTick } from "@/lib/worker-scheduler";
 import { logError } from "@/lib/error-logs";
+import { checkGatewayHealth } from "@/lib/mcp";
 
 const pollMs = Number(process.env.AI_CHAT_WORKER_POLL_MS || 500);
 const concurrency = parseWorkerConcurrency(process.env.AI_CHAT_WORKER_CONCURRENCY);
@@ -301,7 +302,7 @@ function reconcileJobLifecycle(jobId: string) {
 }
 
 function enqueuePersistedChatFollowUp(chatId: string, userId?: string) {
-  if (getActiveParentJob(chatId, userId)) return null;
+  if (getActiveParentJob(chatId)) return null;
   try {
     const job = drainNextQueuedMessage(chatId, userId);
     if (job) {
@@ -341,6 +342,21 @@ function enqueueDueAutomations() {
 process.on("SIGTERM", stop);
 process.on("SIGINT", stop);
 
+async function warmLiveMcp() {
+  const started = Date.now();
+  try {
+    const health = await checkGatewayHealth();
+    const ms = Date.now() - started;
+    if (health.ok) {
+      console.log(`[ai-chat-worker] mcp warm ${health.url} (${ms}ms)`);
+    } else {
+      console.warn(`[ai-chat-worker] mcp not ready ${health.detail} (${ms}ms)`);
+    }
+  } catch (error) {
+    console.warn(`[ai-chat-worker] mcp warmup failed`, error);
+  }
+}
+
 async function main() {
   writeWorkerHeartbeat();
   const heartbeat = setInterval(() => writeWorkerHeartbeat(), 5_000);
@@ -366,6 +382,7 @@ async function main() {
     console.log(`[ai-chat-worker] marked ${recovered.interrupted.length} orphaned run${recovered.interrupted.length === 1 ? "" : "s"} interrupted after restart`);
   }
   console.log(`[ai-chat-worker] started (concurrency: ${Number.isFinite(concurrency) ? concurrency : "unlimited"})`);
+  void warmLiveMcp();
   const active = new Set<Promise<void>>();
   let lastQuestionExpiry = 0;
   let lastQueueDrain = 0;

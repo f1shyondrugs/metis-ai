@@ -91,6 +91,7 @@ import { RemoteTerminal } from "@/components/remote-terminal";
 import { AutomationsPanel } from "@/components/automations-panel";
 import { NotesVoid } from "@/components/notes-void";
 import { ProjectNav } from "@/components/project-nav";
+import { ProjectAvatar } from "@/components/project-avatar";
 import { ProjectHome } from "@/components/project-home";
 import { VoiceInput } from "@/components/voice-input";
 import { SubagentChatView } from "@/components/subagent-chat-view";
@@ -130,8 +131,9 @@ import {
   decideComposerSend,
   isDuplicateComposerSend,
   mergeQueuedFollowUps,
-  shouldAutoDrainQueue,
+  shouldAcceptRemoteComposerInput,
   shouldIgnoreComposerEnter,
+  shouldStartQueuedFollowUp,
 } from "@/lib/composer-send";
 import { getMetisDeviceId } from "@/lib/metis-device";
 import {
@@ -1921,7 +1923,23 @@ export default function AppShell({ defaultCwd }: { defaultCwd: string }) {
   const [projectHomeId, setProjectHomeId] = useState<string | null>(null);
   const [draftProjectId, setDraftProjectId] = useState<string | null>(null);
   const draftProjectIdRef = useRef<string | null>(null);
-  const [sidebarProjects, setSidebarProjects] = useState<Array<{ id: string; name: string }>>([]);
+  const [sidebarProjects, setSidebarProjects] = useState<Array<{
+    id: string;
+    name: string;
+    icon?: string;
+    color?: string;
+    logoStoredName?: string;
+    updatedAt?: string;
+  }>>([]);
+  const removedQueueIdsRef = useRef(new Map<string, Set<string>>());
+  function removedIdsFor(chatId: string) {
+    let ids = removedQueueIdsRef.current.get(chatId);
+    if (!ids) {
+      ids = new Set();
+      removedQueueIdsRef.current.set(chatId, ids);
+    }
+    return ids;
+  }
   const [workspaceFullscreen, setWorkspaceFullscreen] = useState(false);
   const workspaceAutoCollapsedSidebarRef = useRef(false);
   const sidebarRevealPinnedRef = useRef(false);
@@ -4005,10 +4023,14 @@ export default function AppShell({ defaultCwd }: { defaultCwd: string }) {
     setMessageOffset(snap.messageOffset);
     setHasEarlierMessages(snap.hasEarlierMessages);
     setQueuedMessages(
-      (snap.queuedMessages ?? []).map((message) => ({
-        ...message,
-        files: [],
-      })),
+      mergeQueuedFollowUps(
+        [],
+        (snap.queuedMessages ?? []).map((message) => ({
+          ...message,
+          files: [] as PendingFile[],
+        })),
+        { removedIds: removedQueueIdsRef.current.get(id) },
+      ),
     );
     setBrowserTabs(browser.tabs);
     setActiveBrowserTabId(browser.activeTabId);
@@ -4333,12 +4355,14 @@ export default function AppShell({ defaultCwd }: { defaultCwd: string }) {
             setIncognito(Boolean(next.incognito));
             setChatTitle(next.chatTitle);
             setAgentId(next.agentId);
-            setModelId(next.modelId);
-            setModelParams(
-              Object.prototype.hasOwnProperty.call(modelParamsByModel, next.modelId)
-                ? modelParamsByModel[next.modelId] || []
-                : next.modelParams,
-            );
+            if (!runtimeRef.current.has(id)) {
+              setModelId(next.modelId);
+              setModelParams(
+                Object.prototype.hasOwnProperty.call(modelParamsByModel, next.modelId)
+                  ? modelParamsByModel[next.modelId] || []
+                  : next.modelParams,
+              );
+            }
             // A soft revalidation can finish while the foreground SSE stream
             // is still applying deltas. Keep that live state instead of
             // replacing it with the older durable snapshot.
@@ -4379,8 +4403,14 @@ export default function AppShell({ defaultCwd }: { defaultCwd: string }) {
             setActiveTerminalTabId(loadedActiveTerminalTabId);
             setRemoteTerminalCwd(loadedTerminalTabs.find((tab) => tab.id === loadedActiveTerminalTabId)?.cwd || workspaceDefaultCwd);
             setRemoteFileCwd(normalizeWorkDirectory(session.fileCwd || session.remoteCwd, workspaceDefaultCwd));
-            if (Date.now() >= composerDirtyUntilRef.current && typeof session.input === "string") {
-              setInput(session.input);
+            const remoteInput = session.input;
+            if (shouldAcceptRemoteComposerInput({
+              dirtyUntil: composerDirtyUntilRef.current,
+              localUpdatedAt: inputUpdatedAtRef.current,
+              remoteUpdatedAt: session.inputUpdatedAt,
+              remoteInput,
+            })) {
+              setInput(remoteInput ?? "");
               const extra = session.extraFields || {};
               if (Array.isArray(extra.questionCustom)) setQuestionCustom(extra.questionCustom as string[]);
               if (Array.isArray(extra.questionAnswers)) setQuestionAnswers(extra.questionAnswers as string[]);
@@ -4496,6 +4526,8 @@ export default function AppShell({ defaultCwd }: { defaultCwd: string }) {
       setLoadingEarlierMessages(false);
     }
   }, [hasEarlierMessages, loadingEarlierMessages, messageOffset]);
+  const loadEarlierMessagesRef = useRef(loadEarlierMessages);
+  loadEarlierMessagesRef.current = loadEarlierMessages;
 
   useEffect(() => {
     if (loadingChatId || !activeChatId || !hasEarlierMessages || messages.length >= CHAT_MESSAGE_PRELOAD_MAX) return;
@@ -4760,18 +4792,21 @@ export default function AppShell({ defaultCwd }: { defaultCwd: string }) {
         if (!acceptServerSnapshot(activeChatId, data.chat.updatedAt)) return;
         setMessages((current) => mergeMessages(current, mapApiMessages(data.chat.messages, data.chat.runStatus)));
         applyServerQueuedMessages(Array.isArray(data.chat.queuedMessages) ? data.chat.queuedMessages : []);
-        if (data.chat.modelId) setModelId(data.chat.modelId);
+        const liveRun = runtimeRef.current.has(activeChatId);
+        if (data.chat.modelId && !liveRun) {
+          setModelId(data.chat.modelId);
+          setModelParams(
+            Object.prototype.hasOwnProperty.call(modelParamsByModel, data.chat.modelId)
+              ? modelParamsByModel[data.chat.modelId] || []
+              : data.chat.modelParams ?? [],
+          );
+        }
         const serverModeId = data.chat.sessionState?.modeId || "agent";
         setModeId(serverModeId);
         if (typeof window !== "undefined") localStorage.setItem(MODE_STORAGE_KEY, serverModeId);
         const serverRuntimeMode = normalizeRuntimeMode(data.chat.runtimeMode);
         setRuntimeMode(serverRuntimeMode);
         localStorage.setItem(RUNTIME_MODE_STORAGE_KEY, serverRuntimeMode);
-        setModelParams(
-          data.chat.modelId && Object.prototype.hasOwnProperty.call(modelParamsByModel, data.chat.modelId)
-            ? modelParamsByModel[data.chat.modelId] || []
-            : data.chat.modelParams ?? [],
-        );
         const serverWorkspaces = workspacesFromChat(data.chat);
         setWorkspaces(serverWorkspaces);
         setActiveWorkspaceId((current) =>
@@ -5253,12 +5288,9 @@ export default function AppShell({ defaultCwd }: { defaultCwd: string }) {
   useEffect(() => {
     const el = messagesScrollRef.current;
     if (!el) return;
-    enteringChatRef.current = true;
-    stickToBottomRef.current = true;
-    userDetachedFromBottomRef.current = false;
     const pinMessagesToBottom = () => {
       const node = messagesScrollRef.current;
-      if (!node) return;
+      if (!node || userDetachedFromBottomRef.current || userScrollInputRef.current) return;
       programmaticScrollRef.current = true;
       programmaticUntilRef.current = performance.now() + 160;
       node.scrollTop = node.scrollHeight;
@@ -5275,7 +5307,7 @@ export default function AppShell({ defaultCwd }: { defaultCwd: string }) {
     });
     const timer = window.setTimeout(() => {
       pinMessagesToBottom();
-      if (!loadingChatId) enteringChatRef.current = false;
+      enteringChatRef.current = false;
     }, 500);
     return () => {
       window.cancelAnimationFrame(frame1);
@@ -5286,9 +5318,9 @@ export default function AppShell({ defaultCwd }: { defaultCwd: string }) {
 
   useEffect(() => {
     const el = messagesScrollRef.current;
-    if (!el || !stickToBottomRef.current || userDetachedFromBottomRef.current) return;
+    if (!el || !stickToBottomRef.current || userDetachedFromBottomRef.current || userScrollInputRef.current) return;
     const frame = window.requestAnimationFrame(() => {
-      if (!stickToBottomRef.current || userDetachedFromBottomRef.current) return;
+      if (!stickToBottomRef.current || userDetachedFromBottomRef.current || userScrollInputRef.current) return;
       programmaticScrollRef.current = true;
       programmaticUntilRef.current = performance.now() + 160;
       el.scrollTop = el.scrollHeight;
@@ -5308,7 +5340,8 @@ export default function AppShell({ defaultCwd }: { defaultCwd: string }) {
     const SHOW_JUMP_PX = 80;
     const distanceFromBottom = () => el.scrollHeight - el.scrollTop - el.clientHeight;
     const isProgrammaticScroll = () =>
-      programmaticScrollRef.current || performance.now() < programmaticUntilRef.current;
+      !userScrollInputRef.current
+      && (programmaticScrollRef.current || performance.now() < programmaticUntilRef.current);
     const markProgrammaticScroll = () => {
       programmaticScrollRef.current = true;
       programmaticUntilRef.current = performance.now() + 160;
@@ -5324,7 +5357,7 @@ export default function AppShell({ defaultCwd }: { defaultCwd: string }) {
       }, 180);
     };
     const pinIfStuckToBottom = () => {
-      if (userDetachedFromBottomRef.current) return;
+      if (userDetachedFromBottomRef.current || userScrollInputRef.current) return;
       if (!stickToBottomRef.current && !enteringChatRef.current) return;
       markProgrammaticScroll();
       el.scrollTop = el.scrollHeight;
@@ -5361,10 +5394,10 @@ export default function AppShell({ defaultCwd }: { defaultCwd: string }) {
       }
       if (scrolledUp && !layoutResetToTop) {
         detachFromBottom();
-        if (el.scrollTop < 80) void loadEarlierMessages();
+        if (el.scrollTop < 80) void loadEarlierMessagesRef.current();
         return;
       }
-      if (enteringChatRef.current) {
+      if (enteringChatRef.current && !userDetachedFromBottomRef.current && !userScrollInputRef.current) {
         attachToBottom();
         pinIfStuckToBottom();
         return;
@@ -5377,7 +5410,7 @@ export default function AppShell({ defaultCwd }: { defaultCwd: string }) {
         else {
           stickToBottomRef.current = false;
           setShowScrollDown(true);
-          if (el.scrollTop < 80) void loadEarlierMessages();
+          if (el.scrollTop < 80) void loadEarlierMessagesRef.current();
         }
         return;
       }
@@ -5388,7 +5421,7 @@ export default function AppShell({ defaultCwd }: { defaultCwd: string }) {
       if (!nearBottom) {
         stickToBottomRef.current = false;
         setShowScrollDown(true);
-        if (el.scrollTop < 80) void loadEarlierMessages();
+        if (el.scrollTop < 80) void loadEarlierMessagesRef.current();
       }
     };
     const suspendAutoScrollOnWheel = (event: WheelEvent) => {
@@ -5396,15 +5429,24 @@ export default function AppShell({ defaultCwd }: { defaultCwd: string }) {
       if (event.deltaY >= 0) return;
       detachFromBottom();
     };
-    const suspendAutoScrollOnTouch = () => {
-      markUserScrollInput();
-      if (distanceFromBottom() > AT_BOTTOM_PX) detachFromBottom();
-    };
+    let lastTouchY: number | null = null;
     const markPointerAsUserScroll = () => {
       markUserScrollInput();
     };
+    const onTouchStart = (event: TouchEvent) => {
+      markUserScrollInput();
+      lastTouchY = event.touches[0]?.clientY ?? null;
+    };
+    const suspendAutoScrollOnTouch = (event: TouchEvent) => {
+      markUserScrollInput();
+      const y = event.touches[0]?.clientY;
+      if (y == null || lastTouchY == null) return;
+      if (y > lastTouchY + 2) detachFromBottom();
+      lastTouchY = y;
+    };
     el.addEventListener("scroll", updateScrollState, { passive: true });
     el.addEventListener("wheel", suspendAutoScrollOnWheel, { passive: true });
+    el.addEventListener("touchstart", onTouchStart, { passive: true });
     el.addEventListener("touchmove", suspendAutoScrollOnTouch, { passive: true });
     el.addEventListener("pointerdown", markPointerAsUserScroll, { passive: true });
     const inner = el.firstElementChild;
@@ -5415,13 +5457,14 @@ export default function AppShell({ defaultCwd }: { defaultCwd: string }) {
     return () => {
       el.removeEventListener("scroll", updateScrollState);
       el.removeEventListener("wheel", suspendAutoScrollOnWheel);
+      el.removeEventListener("touchstart", onTouchStart);
       el.removeEventListener("touchmove", suspendAutoScrollOnTouch);
       el.removeEventListener("pointerdown", markPointerAsUserScroll);
       observer.disconnect();
       window.cancelAnimationFrame(frame);
       if (userScrollInputTimerRef.current) window.clearTimeout(userScrollInputTimerRef.current);
     };
-  }, [loadEarlierMessages, paneKey, loadingChatId]);
+  }, [paneKey, loadingChatId]);
 
   useEffect(() => {
     if (!highlightedMessageId) return;
@@ -6266,6 +6309,7 @@ export default function AppShell({ defaultCwd }: { defaultCwd: string }) {
   }
 
   function applyServerQueuedMessages(server: PersistedQueuedMessage[]) {
+    const chatId = activeChatIdRef.current || "";
     const consumed = new Set<string>([
       ...stateRef.current.messages.filter((message) => message.role === "user").map((message) => message.id),
       ...queuedSendRef.current,
@@ -6273,7 +6317,7 @@ export default function AppShell({ defaultCwd }: { defaultCwd: string }) {
     setQueuedMessages((current) => mergeQueuedFollowUps(
       current,
       server.map((message) => ({ ...message, files: [] as PendingFile[] })),
-      { consumedIds: consumed },
+      { consumedIds: consumed, removedIds: removedIdsFor(chatId) },
     ));
   }
 
@@ -6331,7 +6375,14 @@ export default function AppShell({ defaultCwd }: { defaultCwd: string }) {
     const activeId = activeChatIdRef.current;
     const activeRuntime = activeId ? runtimeRef.current.get(activeId) : undefined;
     const sendLockKey = activeId || "__draft__";
-    if (busy || activeRuntime || sendInFlightKeysRef.current.has(sendLockKey) || pendingQuestion) {
+    const canStart = shouldStartQueuedFollowUp({
+      drainInFlight: queueDrainRef.current || queuedSendRef.current.size > 0,
+      sendInFlight: sendInFlightKeysRef.current.has(sendLockKey),
+      busy: busy || busyRef.current,
+      waitingForQuestion: Boolean(pendingQuestion),
+      hasActiveRuntime: Boolean(activeRuntime),
+    });
+    if (!canStart) {
       // "Send next" must never cancel the run that is currently applying the
       // user's earlier changes. Move this item to the front; the normal/server
       // FIFO drains it as soon as the current run becomes terminal.
@@ -6343,6 +6394,7 @@ export default function AppShell({ defaultCwd }: { defaultCwd: string }) {
       return;
     }
     queuedSendRef.current.add(message.id);
+    queueDrainRef.current = true;
     queueDrainBlockedRef.current = true;
     try {
       await send(
@@ -6358,6 +6410,7 @@ export default function AppShell({ defaultCwd }: { defaultCwd: string }) {
       );
     } finally {
       queuedSendRef.current.delete(message.id);
+      queueDrainRef.current = false;
       queueDrainBlockedRef.current = false;
       setSendLockTick((value) => value + 1);
     }
@@ -6535,14 +6588,18 @@ export default function AppShell({ defaultCwd }: { defaultCwd: string }) {
     const duplicate = isDuplicateComposerSend(text, lastSendFingerprintRef.current);
     const sendLockKey = activeChatIdRef.current || "__draft__";
     const sendInFlightForChat = sendInFlightKeysRef.current.has(sendLockKey);
+    const activeRuntime = activeChatIdRef.current
+      ? runtimeRef.current.get(activeChatIdRef.current)
+      : undefined;
     const action = decideComposerSend({
       force,
       isOverride,
       hasContent: hasComposerContent,
       sendInFlight: sendInFlightForChat,
-      busy,
+      busy: busy || busyRef.current,
       waitingForQuestion: Boolean(pendingQuestion),
       duplicate,
+      hasActiveRuntime: Boolean(activeRuntime),
     });
     if (action === "ignore") return;
     if (action === "queue") {
@@ -8974,6 +9031,21 @@ export default function AppShell({ defaultCwd }: { defaultCwd: string }) {
                 title={c.title || "Untitled"}
               >
                 <span className="flex min-w-0 items-center gap-2">
+                  {c.projectId ? (() => {
+                    const project = sidebarProjects.find((item) => item.id === c.projectId);
+                    if (!project) return null;
+                    return (
+                      <ProjectAvatar
+                        id={project.id}
+                        icon={project.icon || "folder"}
+                        color={project.color || "#64748b"}
+                        hasLogo={Boolean(project.logoStoredName)}
+                        updatedAt={project.updatedAt}
+                        label={project.name}
+                        className="size-3.5 rounded-md"
+                      />
+                    );
+                  })() : null}
                   {runningChatIds.includes(c.id) ||
                   c.runStatus === "running" ||
                   c.runStatus === "waiting_input" ||

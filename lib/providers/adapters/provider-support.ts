@@ -64,7 +64,7 @@ import { subagentMetadataFromTool } from "@/lib/subagent-tool";
 import { LoopGuard, routeTask } from "@/lib/agent-efficiency";
 import { buildMcpContext, getMcpBridgeEnv, getMcpServers } from "@/lib/mcp";
 import { runtimeModeForChat } from "@/lib/runtime-mode";
-import { mcpBridgeTools } from "@/lib/mcp-bridge";
+import { mcpBridgeHttpTools, mcpBridgeTools } from "@/lib/mcp-bridge";
 import {
   METIS_SHARED_AGENT_CONTROL,
   toolContractPrompt,
@@ -1407,15 +1407,28 @@ export function modeMcpEnv(context: ProviderContext): Record<string, string> {
 }
 
 export async function agentToolsFor(context: ProviderContext): Promise<ToolSet> {
+  const mcpContext = providerMcpContext(context);
   const env = modeMcpEnv(context);
+  const connect = async (useHttp: boolean) => {
+    if (useHttp) {
+      const servers = getMcpServers(mcpContext);
+      if (servers.gateway.type === "http") {
+        return await mcpBridgeHttpTools({
+          url: servers.gateway.url,
+          headers: servers.gateway.headers,
+        });
+      }
+    }
+    return await mcpBridgeTools(useHttp ? env : {
+      ...env,
+      MCP_GATEWAY_RETRY: String(Date.now()),
+    });
+  };
   try {
-    return await mcpBridgeTools(env);
+    return await connect(true);
   } catch (first) {
     try {
-      return await mcpBridgeTools({
-        ...env,
-        MCP_GATEWAY_RETRY: String(Date.now()),
-      });
+      return await connect(false);
     } catch (error) {
       const detail = error instanceof Error ? error.message : String(error);
       const previous = first instanceof Error ? first.message : String(first);

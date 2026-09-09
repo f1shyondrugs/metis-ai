@@ -9,6 +9,7 @@ import {
   type FocusEvent,
   type KeyboardEvent,
 } from "react";
+import { shouldSyncComposerDom } from "@/lib/composer-send";
 import { cn } from "@/lib/utils";
 
 type RichComposerInputProps = {
@@ -37,6 +38,13 @@ function linkPattern(mentionLabels: string[]) {
     .map(escapeRegExp);
   const mentionPart = mentions.length ? `@(?:${mentions.join("|")})` : "@[^\\s]+";
   return new RegExp(`(^|\\s)(${mentionPart}|https?:\\/\\/[^\\s]+)`, "g");
+}
+
+function composerPlainText(element: HTMLDivElement) {
+  let text = element.innerText || "";
+  const last = element.lastChild;
+  if (last && last.nodeName === "BR") text = text.replace(/\n$/, "");
+  return text;
 }
 
 function formatText(element: HTMLDivElement, mentionLabels: string[]) {
@@ -121,13 +129,11 @@ export const RichComposerInput = forwardRef<HTMLDivElement, RichComposerInputPro
 
     useLayoutEffect(() => {
       const element = editorRef.current;
-      if (!element || element.innerText === value) return;
-
-      const isFocused = document.activeElement === element;
-      const cursor = isFocused ? caretOffset(element) : null;
+      if (!element) return;
+      const current = composerPlainText(element);
+      if (!shouldSyncComposerDom(current, value, document.activeElement === element)) return;
       element.textContent = value;
-      formatText(element, mentionLabels);
-      if (cursor !== null) restoreCaret(element, Math.min(cursor, value.length));
+      if (value) formatText(element, mentionLabels);
     }, [mentionLabels, value]);
 
     return (
@@ -148,15 +154,16 @@ export const RichComposerInput = forwardRef<HTMLDivElement, RichComposerInputPro
         onInput={(event) => {
           const element = event.currentTarget;
           const cursor = caretOffset(element);
-          const nextValue = element.innerText || "";
-          formatText(element, mentionLabels);
-          restoreCaret(element, cursor);
-          onChange(nextValue, cursor);
+          onChange(composerPlainText(element), cursor);
         }}
         onKeyDown={onKeyDown}
         onPaste={onPaste}
         onFocus={onFocus}
-        onBlur={onBlur}
+        onBlur={(event) => {
+          const element = event.currentTarget;
+          formatText(element, mentionLabels);
+          onBlur?.(event);
+        }}
         onClick={(event) => {
           const target = event.target as HTMLElement;
           if (target.closest("[data-composer-link]")) event.preventDefault();

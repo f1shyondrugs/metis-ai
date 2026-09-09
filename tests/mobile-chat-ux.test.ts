@@ -61,18 +61,22 @@ test("manual upward scrolling disables streaming auto-pin", () => {
   assert.match(shell, /stickToBottomRef\.current = false/);
   assert.match(shell, /scrolledUp && !layoutResetToTop/);
   assert.match(shell, /userScrollInputRef\.current && scrolledDown && atBottom/);
-  assert.match(shell, /if \(userDetachedFromBottomRef\.current\) return/);
+  assert.match(shell, /if \(userDetachedFromBottomRef\.current \|\| userScrollInputRef\.current\) return/);
   assert.match(shell, /el\.addEventListener\("wheel", suspendAutoScrollOnWheel/);
   assert.match(shell, /el\.addEventListener\("touchmove", suspendAutoScrollOnTouch/);
+  assert.match(shell, /if \(y > lastTouchY \+ 2\) detachFromBottom\(\)/);
+  assert.doesNotMatch(shell, /\}, \[loadEarlierMessages, paneKey, loadingChatId\]\)/);
 });
 
 test("opening a chat pins the transcript to the bottom and does not page history while pinning", () => {
   assert.match(shell, /enteringChatRef\.current = true/);
-  assert.match(shell, /if \(!loadingChatId\) enteringChatRef\.current = false/);
+  assert.match(shell, /enteringChatRef\.current = false/);
+  assert.doesNotMatch(shell, /if \(!loadingChatId\) enteringChatRef\.current = false/);
   assert.match(shell, /layoutResetToTop/);
-  assert.match(shell, /if \(el\.scrollTop < 80\) void loadEarlierMessages\(\)/);
+  assert.match(shell, /if \(el\.scrollTop < 80\) void loadEarlierMessagesRef\.current\(\)/);
   assert.match(shell, /new ResizeObserver\(pinIfStuckToBottom\)/);
   assert.match(shell, /if \(enteringChatRef\.current\) return/);
+  assert.match(shell, /userDetachedFromBottomRef\.current \|\| userScrollInputRef\.current/);
 });
 
 test("completed and stale historical subagents are not shown as still running", () => {

@@ -1,5 +1,5 @@
-import { appendRunEvent, updateJob } from "@/lib/db-jobs";
-import { getChat, updateChat } from "@/lib/db-store";
+import { runAgentTimedWait } from "@/lib/agent-wait";
+import { getChat } from "@/lib/db-store";
 import { bearerTokenMatches } from "@/lib/security";
 
 export const runtime = "nodejs";
@@ -42,23 +42,20 @@ export async function POST(req: Request) {
   } catch (error) {
     return Response.json({ error: error instanceof Error ? error.message : "Invalid duration" }, { status: 400 });
   }
-  const waitingUntil = new Date(Date.now() + waitMs).toISOString();
   const reason = typeof body.reason === "string" ? body.reason.trim().slice(0, 500) : undefined;
-  updateJob(jobId, { status: "waiting_input" });
-  updateChat(chatId, { runStatus: "waiting_input", runUpdatedAt: new Date().toISOString() }, userId);
-  appendRunEvent(jobId, chatId, userId, "status", {
-    status: "waiting_input",
-    waitingUntil,
-    durationMs: waitMs,
-    reason,
-  });
-
-  await new Promise((resolve) => setTimeout(resolve, waitMs));
-  const current = updateJob(jobId, { status: "running" });
-  if (!current || current.status !== "running") {
-    throw new Error("The agent wait was cancelled.");
+  try {
+    const result = await runAgentTimedWait({
+      jobId,
+      chatId,
+      userId,
+      waitMs,
+      reason,
+    });
+    return Response.json(result);
+  } catch (error) {
+    return Response.json(
+      { error: error instanceof Error ? error.message : "The agent wait was cancelled." },
+      { status: 409 },
+    );
   }
-  updateChat(chatId, { runStatus: "running", runUpdatedAt: new Date().toISOString() }, userId);
-  appendRunEvent(jobId, chatId, userId, "status", { status: "running", reason: "Agent wait finished." });
-  return Response.json({ waitedMs: waitMs, waitingUntil });
 }

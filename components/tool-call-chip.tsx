@@ -738,11 +738,13 @@ export const ToolCallGroup = memo(function ToolCallGroup({
     Boolean(todosFromToolPayload(tool.input, tool.result)?.length);
   const planTools = includePlans ? tools.filter((tool) => tool.kind === "plan") : [];
   const noteTools = tools.filter((tool) => tool.kind === "note");
+  const canvasTools = tools.filter((tool) => tool.kind === "canvas");
   const todoTools = tools.filter((tool) => isTodoTool(tool));
   const regularTools = tools.filter(
     (tool) =>
       tool.kind !== "note" &&
       tool.kind !== "plan" &&
+      tool.kind !== "canvas" &&
       !isTodoTool(tool),
   );
   const automationTools = tools.filter((tool) => isAutomationCardTool(tool));
@@ -758,7 +760,7 @@ export const ToolCallGroup = memo(function ToolCallGroup({
  durationMs: thinkingList.reduce((sum, item) => sum + (item.durationMs || 0), 0) || thinkingList.at(-1)?.durationMs,
  }
  : undefined;
- const groupTitle = activityGroupLabel([...regularEntries, ...noteTools], combinedThinking);
+ const groupTitle = activityGroupLabel(regularEntries, combinedThinking);
   const groupOpen = userOpen ?? Boolean(live || autoExpand);
   const lastToolId = regularTools[regularTools.length - 1]?.id;
   const renderTool = (tool: ToolCallData, nested = false) => (
@@ -801,6 +803,9 @@ export const ToolCallGroup = memo(function ToolCallGroup({
  {noteTools.map((tool, index) => (
  <div key={toolReactKey(tool, index)}>{renderTool(tool)}</div>
  ))}
+ {canvasTools.map((tool, index) => (
+ <div key={toolReactKey(tool, index)}>{renderTool(tool)}</div>
+ ))}
  {todoTools.map((tool, index) => (
  <div key={toolReactKey(tool, index)}>{renderTool(tool)}</div>
  ))}
@@ -810,9 +815,21 @@ export const ToolCallGroup = memo(function ToolCallGroup({
  </>
  );
  }
- const activityRunning = [...regularEntries, ...noteTools, ...automationTools].some((tool) => isToolRunning(tool.status));
+ const activityRunning = regularEntries.some((tool) => isToolRunning(tool.status));
  return (
  <div className="w-full min-w-0" style={{ overflowAnchor: "none" }}>
+ {planTools.map((tool, index) => (
+ <div key={toolReactKey(tool, index)}>{renderTool(tool)}</div>
+ ))}
+ {noteTools.map((tool, index) => (
+ <div key={toolReactKey(tool, index)}>{renderTool(tool)}</div>
+ ))}
+ {canvasTools.map((tool, index) => (
+ <div key={toolReactKey(tool, index)}>{renderTool(tool)}</div>
+ ))}
+ {automationTools.map((tool, index) => (
+ <div key={toolReactKey(tool, index)}>{renderTool(tool)}</div>
+ ))}
  {todoTools.map((tool, index) => (
  <div key={toolReactKey(tool, index)}>{renderTool(tool)}</div>
  ))}
@@ -846,17 +863,8 @@ export const ToolCallGroup = memo(function ToolCallGroup({
  embedded
  />
  ) : null}
- {planTools.map((tool, index) => (
- <div key={toolReactKey(tool, index)}>{renderTool(tool)}</div>
- ))}
- {noteTools.map((tool, index) => (
- <div key={toolReactKey(tool, index)}>{renderTool(tool)}</div>
- ))}
  {regularEntries.map((tool, index) => (
  <div key={toolReactKey(tool, index)}>{renderTool(tool, true)}</div>
- ))}
- {automationTools.map((tool) => (
- <div key={tool.id}>{renderTool(tool, true)}</div>
  ))}
  </div>
  ) : null}

@@ -970,41 +970,151 @@ export async function cleanupBrowserSessions() {
   }
 }
 
+export type BrowserStorageCookie = {
+  name: string;
+  domain: string;
+  path: string;
+  expires: number;
+  size: number;
+};
+
+export type BrowserStorageEntry = { key: string; value: string };
+
 export type BrowserStorageOrigin = {
   origin: string;
   storageTypes: string[];
   lastAccess?: string;
-  sizeBytes: null;
+  sizeBytes: number;
+  cookies: BrowserStorageCookie[];
+  localStorage: BrowserStorageEntry[];
+  sessionStorage: BrowserStorageEntry[];
 };
+
+function storageOriginMatches(rawOrigin: string, hostname: string) {
+  try {
+    return new URL(rawOrigin).hostname === hostname;
+  } catch {
+    return false;
+  }
+}
+
+function cookieSize(cookie: { name: string; value: string; domain: string; path: string }) {
+  return Buffer.byteLength(`${cookie.name}=${cookie.value}; Domain=${cookie.domain}; Path=${cookie.path}`, "utf8");
+}
+
+async function readPageStorage(page: Page) {
+  return page.evaluate(async () => {
+    const entries = (storage: Storage) => Array.from({ length: storage.length }, (_, index) => {
+      const key = storage.key(index) || "";
+      return { key, value: storage.getItem(key) || "" };
+    });
+    const estimate = navigator.storage?.estimate
+      ? await navigator.storage.estimate().catch(() => undefined)
+      : undefined;
+    return {
+      localStorage: entries(localStorage),
+      sessionStorage: entries(sessionStorage),
+      usage: typeof estimate?.usage === "number" ? estimate.usage : 0,
+    };
+  });
+}
+
+function originForCookie(cookie: { domain: string }, origins: Iterable<string>) {
+  const hostname = cookie.domain.replace(/^\\./, "");
+  return [...origins].find((candidate) => storageOriginMatches(candidate, hostname)) || `https://${hostname}`;
+}
 
 export async function listBrowserStorage(ownerId: string): Promise<BrowserStorageOrigin[]> {
   const context = await getPersistentContext(ownerId);
   const metadata = readMetadata(ownerId);
-  const origins = new Map<string, BrowserStorageOrigin>(
-    Object.entries(metadata).map(([origin, value]) => [origin, {
+  const cookies = await context.cookies();
+  const origins = new Map<string, BrowserStorageOrigin>();
+  for (const [origin, value] of Object.entries(metadata)) {
+    origins.set(origin, {
       origin,
       storageTypes: ["persistent profile"],
       lastAccess: value.lastAccess,
-      sizeBytes: null,
-    }]),
-  );
-  for (const cookie of await context.cookies()) {
-    const hostname = cookie.domain.replace(/^\./, "");
-    const existingOrigin = [...origins.keys()].find((candidate) => {
-      try {
-        return new URL(candidate).hostname === hostname;
-      } catch {
-        return false;
-      }
+      sizeBytes: 0,
+      cookies: [],
+      localStorage: [],
+      sessionStorage: [],
     });
-    const origin = existingOrigin || `https://${hostname}`;
-    if (!origins.has(origin)) {
-      origins.set(origin, { origin, storageTypes: ["cookies"], sizeBytes: null });
-    } else if (!origins.get(origin)!.storageTypes.includes("cookies")) {
-      origins.get(origin)!.storageTypes.push("cookies");
+  }
+  for (const cookie of cookies) {
+    const origin = originForCookie(cookie, [...origins.keys()]);
+    const existing = origins.get(origin) || {
+      origin,
+      storageTypes: [],
+      sizeBytes: 0,
+      cookies: [],
+      localStorage: [],
+      sessionStorage: [],
+    };
+    existing.cookies.push({ name: cookie.name, domain: cookie.domain, path: cookie.path, expires: cookie.expires, size: cookieSize(cookie) });
+    if (!existing.storageTypes.includes("cookies")) existing.storageTypes.push("cookies");
+    origins.set(origin, existing);
+  }
+  for (const page of context.pages()) {
+    let origin: string;
+    try {
+      origin = new URL(page.url()).origin;
+      if (origin === "null") continue;
+    } catch {
+      continue;
     }
+    const existing = origins.get(origin) || {
+      origin,
+      storageTypes: [],
+      sizeBytes: 0,
+      cookies: [],
+      localStorage: [],
+      sessionStorage: [],
+    };
+    const pageStorage = await readPageStorage(page).catch(() => null);
+    if (!pageStorage) continue;
+    existing.localStorage = pageStorage.localStorage;
+    existing.sessionStorage = pageStorage.sessionStorage;
+    if (existing.localStorage.length && !existing.storageTypes.includes("localStorage")) existing.storageTypes.push("localStorage");
+    if (existing.sessionStorage.length && !existing.storageTypes.includes("sessionStorage")) existing.storageTypes.push("sessionStorage");
+    const valueBytes = [...existing.localStorage, ...existing.sessionStorage]
+      .reduce((total, entry) => total + Buffer.byteLength(entry.key + entry.value, "utf8"), 0);
+    existing.sizeBytes = existing.cookies.reduce((total, cookie) => total + cookie.size, 0) + Math.max(valueBytes, pageStorage.usage);
+    origins.set(origin, existing);
+  }
+  for (const existing of origins.values()) {
+    if (!existing.sizeBytes) existing.sizeBytes = existing.cookies.reduce((total, cookie) => total + cookie.size, 0);
   }
   return [...origins.values()].sort((a, b) => a.origin.localeCompare(b.origin));
+}
+
+export async function createBrowserStorageEntry(
+  ownerId: string,
+  rawOrigin: string,
+  input: { name: string; value: string; type: "cookie" | "localStorage" | "sessionStorage" },
+) {
+  const origin = new URL(rawOrigin).origin;
+  if (!["http:", "https:"].includes(new URL(origin).protocol)) throw new Error("Invalid browser origin");
+  const name = input.name.trim();
+  if (!name) throw new Error("Storage entry name is required");
+  const context = await getPersistentContext(ownerId);
+  if (input.type === "cookie") {
+    await context.addCookies([{ name, value: input.value, url: origin, path: "/" }]);
+  } else {
+    const existingPage = context.pages().find((page) => page.url() === origin || page.url().startsWith(`${origin}/`));
+    const page = existingPage || await context.newPage();
+    if (!existingPage) {
+      await installRequestGuard(page);
+      await page.goto(await assertAllowedUrl(origin), { waitUntil: "domcontentloaded", timeout: 30_000 }).catch(() => undefined);
+    }
+    await page.evaluate(({ name: key, value, type }) => {
+      (type === "localStorage" ? localStorage : sessionStorage).setItem(key, value);
+    }, { name, value: input.value, type: input.type });
+    // Keep a newly-created origin page available so the next GET can inspect
+    // local/session storage values without another navigation.
+  }
+  const metadata = readMetadata(ownerId);
+  metadata[origin] = { lastAccess: new Date().toISOString() };
+  writeMetadata(ownerId, metadata);
 }
 
 async function closeOwnerContext(ownerId: string) {

@@ -110,7 +110,7 @@ export function ProjectNav({
  const visibleChats = useMemo(() => {
   return chats.filter((chat) => {
    if (chat.archived) return false;
-   if (!activeProjectId) return !chat.projectId;
+   if (!activeProjectId) return true;
    return chat.projectId === activeProjectId;
   });
  }, [chats, activeProjectId]);

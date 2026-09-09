@@ -5,14 +5,55 @@ import {
   decideComposerSend,
   isDuplicateComposerSend,
   mergeQueuedFollowUps,
+  shouldAcceptRemoteComposerInput,
   shouldAutoDrainQueue,
   shouldIgnoreComposerEnter,
+  shouldStartQueuedFollowUp,
+  shouldSyncComposerDom,
 } from "../lib/composer-send";
 
 test("composerLiveText prefers non-empty DOM text over stale React state", () => {
   assert.equal(composerLiveText("hello from editor", ""), "hello from editor");
   assert.equal(composerLiveText("\n", "draft"), "draft");
   assert.equal(composerLiveText("  ", "draft"), "draft");
+});
+
+test("shouldSyncComposerDom clears a focused editor after send", () => {
+  assert.equal(shouldSyncComposerDom("hello", "", true), true);
+  assert.equal(shouldSyncComposerDom("hello", "hello", true), false);
+  assert.equal(shouldSyncComposerDom("hello", "other draft", true), false);
+  assert.equal(shouldSyncComposerDom("hello", "other draft", false), true);
+});
+
+test("shouldAcceptRemoteComposerInput rejects a stale draft after local clear", () => {
+  assert.equal(
+    shouldAcceptRemoteComposerInput({
+      dirtyUntil: 0,
+      now: 2_000,
+      localUpdatedAt: "2026-09-09T14:00:01.000Z",
+      remoteUpdatedAt: "2026-09-09T14:00:00.000Z",
+      remoteInput: "hello",
+    }),
+    false,
+  );
+  assert.equal(
+    shouldAcceptRemoteComposerInput({
+      dirtyUntil: 1_500,
+      now: 1_000,
+      remoteInput: "hello",
+    }),
+    false,
+  );
+  assert.equal(
+    shouldAcceptRemoteComposerInput({
+      dirtyUntil: 0,
+      now: 2_000,
+      localUpdatedAt: "2026-09-09T14:00:00.000Z",
+      remoteUpdatedAt: "2026-09-09T14:00:02.000Z",
+      remoteInput: "newer",
+    }),
+    true,
+  );
 });
 
 test("shouldIgnoreComposerEnter skips IME confirmation and key repeat", () => {
@@ -93,6 +134,53 @@ test("decideComposerSend queues follow-ups while a run is in flight instead of d
   );
 });
 
+test("decideComposerSend queues when the same chat already has a live runtime", () => {
+  assert.equal(
+    decideComposerSend({
+      force: false,
+      isOverride: false,
+      hasContent: true,
+      sendInFlight: false,
+      busy: false,
+      waitingForQuestion: false,
+      duplicate: false,
+      hasActiveRuntime: true,
+    }),
+    "queue",
+  );
+});
+
+test("shouldStartQueuedFollowUp allows only one queued send at a time", () => {
+  assert.equal(
+    shouldStartQueuedFollowUp({
+      drainInFlight: true,
+      sendInFlight: false,
+      busy: false,
+      waitingForQuestion: false,
+    }),
+    false,
+  );
+  assert.equal(
+    shouldStartQueuedFollowUp({
+      drainInFlight: false,
+      sendInFlight: false,
+      busy: false,
+      waitingForQuestion: false,
+      hasActiveRuntime: true,
+    }),
+    false,
+  );
+  assert.equal(
+    shouldStartQueuedFollowUp({
+      drainInFlight: false,
+      sendInFlight: false,
+      busy: false,
+      waitingForQuestion: false,
+    }),
+    true,
+  );
+});
+
 test("shouldAutoDrainQueue waits for sendInFlight and the drain lock", () => {
   assert.equal(
     shouldAutoDrainQueue({
@@ -128,6 +216,18 @@ test("shouldAutoDrainQueue waits for sendInFlight and the drain lock", () => {
     }),
     false,
   );
+  assert.equal(
+    shouldAutoDrainQueue({
+      busy: false,
+      sendInFlight: false,
+      waitingForQuestion: false,
+      drainBlocked: false,
+      drainInProgress: false,
+      queueLength: 1,
+      serverOwnsDrain: true,
+    }),
+    false,
+  );
 });
 
 test("mergeQueuedFollowUps keeps local follow-ups when a stale snapshot is empty", () => {
@@ -153,6 +253,14 @@ test("mergeQueuedFollowUps prefers the local copy so attachments survive a GET",
   assert.deepEqual(
     mergeQueuedFollowUps(local, server),
     local,
+  );
+});
+
+test("mergeQueuedFollowUps does not resurrect locally removed follow-ups", () => {
+  const server = [{ id: "q-1", text: "later" }, { id: "q-2", text: "keep" }];
+  assert.deepEqual(
+    mergeQueuedFollowUps([{ id: "q-2", text: "keep" }], server, { removedIds: ["q-1"] }),
+    [{ id: "q-2", text: "keep" }],
   );
 });
 

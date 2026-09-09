@@ -8,9 +8,19 @@ const projectsSource = readFileSync(new URL("../lib/projects.ts", import.meta.ur
 const projectHomeSource = readFileSync(new URL("../components/project-home.tsx", import.meta.url), "utf8");
 const notesRoute = readFileSync(new URL("../app/api/notes/route.ts", import.meta.url), "utf8");
 
-test("None project view hides chats that belong to a project", () => {
- assert.match(navSource, /if \(!activeProjectId\) return !chat\.projectId/);
- assert.doesNotMatch(navSource, /if \(!activeProjectId\) return true/);
+test("All project view shows chats from every project", () => {
+ assert.match(navSource, /if \(!activeProjectId\) return true/);
+ assert.doesNotMatch(navSource, /if \(!activeProjectId\) return !chat\.projectId/);
+});
+
+test("assigned chats show a project avatar; unassigned chats do not", () => {
+ const shellSource = readFileSync(new URL("../components/app-shell.tsx", import.meta.url), "utf8");
+ const row = shellSource.slice(shellSource.indexOf("renderChat={(chat) => {"));
+ assert.match(row, /c\.projectId \? \(\(\) => \{/);
+ assert.match(row, /<ProjectAvatar/);
+ assert.match(row, /label=\{project\.name\}/);
+ assert.match(row, /sidebarProjects\.find\(\(item\) => item\.id === c\.projectId\)/);
+ assert.match(row, /if \(!project\) return null/);
 });
 
 test("Project Hub uploads use the normal chat JSON-base64 contract", () => {

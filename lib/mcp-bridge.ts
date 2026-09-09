@@ -168,6 +168,62 @@ const INIT_PARAMS = {
   clientInfo: { name: "metis-ai-sdk-bridge", version: "1.0.0" },
 };
 
+export type HttpMcpTarget = {
+  url: string;
+  headers?: Record<string, string>;
+};
+
+type HttpMcpSession = {
+  client: {
+    listTools: () => Promise<{ tools?: McpBridgeTool[] }>;
+    callTool: (request: { name: string; arguments: Record<string, unknown> }) => Promise<unknown>;
+    close: () => Promise<void>;
+  };
+  transport: { close?: () => Promise<void> };
+};
+
+const httpSessions = new Map<string, Promise<HttpMcpSession>>();
+
+function httpSessionKey(target: HttpMcpTarget) {
+  return `${target.url}\n${JSON.stringify(target.headers || {})}`;
+}
+
+async function getHttpSession(target: HttpMcpTarget): Promise<HttpMcpSession> {
+  const key = httpSessionKey(target);
+  const existing = httpSessions.get(key);
+  if (existing) return existing;
+  const pending = (async () => {
+    const [{ Client }, { StreamableHTTPClientTransport }] = await Promise.all([
+      import("@modelcontextprotocol/sdk/client/index.js"),
+      import("@modelcontextprotocol/sdk/client/streamableHttp.js"),
+    ]);
+    const client = new Client({ name: "metis-ai-sdk-bridge", version: "1.0.0" });
+    const transport = new StreamableHTTPClientTransport(new URL(target.url), {
+      requestInit: { headers: target.headers },
+    });
+    await client.connect(transport);
+    return { client, transport } as HttpMcpSession;
+  })();
+  httpSessions.set(key, pending);
+  try {
+    return await pending;
+  } catch (error) {
+    httpSessions.delete(key);
+    throw error;
+  }
+}
+
+async function withHttpSession<T>(target: HttpMcpTarget, fn: (session: HttpMcpSession) => Promise<T>): Promise<T> {
+  try {
+    return await fn(await getHttpSession(target));
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    if (!/session|connect|ECONN|socket|closed|fetch failed|terminated/i.test(message)) throw error;
+    httpSessions.delete(httpSessionKey(target));
+    return await fn(await getHttpSession(target));
+  }
+}
+
 /** Tools that need extra chat wiring or hang a non-Cursor provider. */
 const DEFAULT_EXCLUDE = new Set([
   "provide_file",
@@ -286,7 +342,50 @@ export async function mcpBridgeTools(
   return tools;
 }
 
+export async function mcpBridgeHttpTools(
+  target: HttpMcpTarget,
+  options: { include?: string[]; exclude?: string[] } = {},
+): Promise<ToolSet> {
+  const definitions = await withHttpSession(target, async (session) => {
+    const result = await session.client.listTools();
+    return result?.tools || [];
+  });
+
+  const allowed = new Set(selectBridgeTools(definitions.map((item) => item.name), options));
+  const tools: ToolSet = {};
+  for (const definition of definitions) {
+    if (!allowed.has(definition.name)) continue;
+    const schema = sanitizeJsonSchema(definition.inputSchema || { type: "object", properties: {} });
+    const bridgedExecute = async (args: Record<string, unknown>) => {
+      const validatedArgs = assertBridgeToolInput(definition.name, args, schema);
+      const result = await withHttpSession(target, async (session) => {
+        return session.client.callTool({ name: definition.name, arguments: validatedArgs });
+      });
+      const record = result as { content?: Array<{ type?: string; text?: string }>; isError?: boolean };
+      const text = (record?.content || [])
+        .filter((item) => item.type === "text")
+        .map((item) => item.text || "")
+        .join("\n");
+      if (record?.isError) throw new Error(text || `Tool ${definition.name} failed`);
+      return text || result || "";
+    };
+    tools[definition.name] = tool({
+      description: (definition.description || definition.name).slice(0, 500),
+      inputSchema: jsonSchema(schema as Parameters<typeof jsonSchema>[0]),
+      execute: bridgedExecute,
+    } as never) as ToolSet[string];
+  }
+  return tools;
+}
+
 export function closeMcpBridges() {
   for (const [, gateway] of startedProcesses) gateway.proc.kill();
   startedProcesses.clear();
+  for (const pending of httpSessions.values()) {
+    void pending.then(async (session) => {
+      try { await session.client.close(); } catch { /* ignore */ }
+      try { await session.transport.close?.(); } catch { /* ignore */ }
+    });
+  }
+  httpSessions.clear();
 }

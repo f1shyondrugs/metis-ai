@@ -1,6 +1,6 @@
 import { getAuthenticatedUserId, isAuthenticated } from "@/lib/auth";
 import { getGlobalModelSettings, saveGlobalModelSettings } from "@/lib/db-store";
-import { addManualSkill, enabledSkills, listInstalledSkills, readSkillMarkdown, skillEnabled } from "@/lib/skills";
+import { addManualSkill, enabledSkills, listSkillSettings, readSkillMarkdown } from "@/lib/skills";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -8,7 +8,7 @@ export const dynamic = "force-dynamic";
 function responseSkills(ownerId?: string) {
  const settings = getGlobalModelSettings(ownerId);
  return {
- skills: listInstalledSkills().map((skill) => ({ ...skill, enabled: skillEnabled(skill.id, settings) })),
+ skills: listSkillSettings(settings),
  enabled: enabledSkills(settings).map((skill) => skill.id),
  };
 }
@@ -54,14 +54,23 @@ export async function POST(req: Request) {
 export async function PATCH(req: Request) {
  if (!(await isAuthenticated(req))) return Response.json({ error: "Unauthorized" }, { status: 401 });
  const ownerId = (await getAuthenticatedUserId(req)) ?? undefined;
- const body = (await req.json().catch(() => ({}))) as { enabledSkills?: Record<string, boolean> };
+ const body = (await req.json().catch(() => ({}))) as {
+ enabledSkills?: Record<string, boolean>;
+ alwaysOnSkills?: Record<string, boolean>;
+ };
  const current = getGlobalModelSettings(ownerId);
- const enabledSkillsNext = {
+ const settings = saveGlobalModelSettings({
+ ...current,
+ enabledSkills: {
  ...(current.enabledSkills || {}),
  ...(body.enabledSkills && typeof body.enabledSkills === "object" ? body.enabledSkills : {}),
- };
- const settings = saveGlobalModelSettings({ ...current, enabledSkills: enabledSkillsNext }, ownerId);
+ },
+ alwaysOnSkills: {
+ ...(current.alwaysOnSkills || {}),
+ ...(body.alwaysOnSkills && typeof body.alwaysOnSkills === "object" ? body.alwaysOnSkills : {}),
+ },
+ }, ownerId);
  return Response.json({
- skills: listInstalledSkills().map((skill) => ({ ...skill, enabled: skillEnabled(skill.id, settings) })),
+ skills: listSkillSettings(settings),
  });
 }

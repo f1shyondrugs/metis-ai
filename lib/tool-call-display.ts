@@ -58,6 +58,7 @@ const STANDALONE_TOOL_KINDS = new Set([
   "plan",
   "note",
   "canvas",
+  "automation",
 ]);
 
 export function isStandaloneToolKind(kind?: string): boolean {
@@ -74,6 +75,7 @@ export type ToolKind =
   | "canvas"
   | "note"
   | "todo"
+  | "automation"
   | "browser"
   | "memory"
  | "compaction"
@@ -185,6 +187,7 @@ export function classifyToolKind(name: string, input?: unknown, result?: unknown
   const value = `${inner} ${name}`.toLowerCase();
   if (/compaction|context[ _-]?compact/.test(value)) return "compaction";
  if (/(todo)/.test(value)) return "todo";
+  if (value.includes("automation")) return "automation";
   if (/(note)/.test(value)) return "note";
   if (/(memory|remember)/.test(value)) return "memory";
   if (/(browser|navigate|playwright|webfetch)/.test(value)) return "browser";
@@ -311,8 +314,13 @@ export function layoutAssistantParts<TTool extends { kind?: string }>(
   // create/edit_plan or write_todos repeatedly while working; rendering every
   // intermediate call produces duplicate plan/task cards. Normalize tools once,
   // then keep only the latest plan and todo for this assistant turn.
-  const normalized = parts.map((part) => {
-    if (part.type !== "tool") return part;
+  const normalizedToolsByIdentity = new Map<string, TTool & { type: "tool" }>();
+  const normalized: Array<LayoutPart<TTool>> = [];
+  for (const part of parts) {
+    if (part.type !== "tool") {
+      normalized.push(part);
+      continue;
+    }
     const { type: _type, ...tool } = part;
     void _type;
     const next = withEnrichedToolDisplay(tool as unknown as TTool & {
@@ -321,8 +329,16 @@ export function layoutAssistantParts<TTool extends { kind?: string }>(
       result?: string;
       kind?: string;
     }) as unknown as TTool;
-    return { type: "tool" as const, ...next };
-  });
+    const key = toolIdentity(next);
+    const existing = normalizedToolsByIdentity.get(key);
+    if (existing) {
+      Object.assign(existing, next);
+      continue;
+    }
+    const normalizedTool = { type: "tool" as const, ...next };
+    normalizedToolsByIdentity.set(key, normalizedTool);
+    normalized.push(normalizedTool);
+  }
   const lastStateIndex = new Map<string, number>();
   normalized.forEach((part, index) => {
     if (part.type === "tool" && (part.kind === "plan" || part.kind === "todo")) {
@@ -425,6 +441,23 @@ export function layoutAssistantParts<TTool extends { kind?: string }>(
   return coalesceActivityBlocks(blocks);
 }
 
+function toolIdentity<TTool extends { kind?: string }>(tool: TTool): string {
+  const value = tool as TTool & { id?: string; callId?: string; name?: string; input?: string; result?: string };
+  const callId = value.callId?.trim() || value.id?.trim();
+  if (callId) return `call:${callId}`;
+  let input = value.input || "";
+  try {
+    const parsed = JSON.parse(input) as Record<string, unknown>;
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+      const nested = parsed.arguments ?? parsed.args;
+      if (nested !== undefined) input = typeof nested === "string" ? nested : JSON.stringify(nested);
+    }
+  } catch {
+    // Streamed or plain-text arguments still participate in the fingerprint.
+  }
+  return `fingerprint:${JSON.stringify([value.kind || "", value.name || "", input])}`;
+}
+
 function mergeBlockThinking(
  a?: { content: string; done?: boolean; durationMs?: number },
  b?: { content: string; done?: boolean; durationMs?: number },
@@ -465,8 +498,8 @@ function coalesceActivityBlocks<TTool extends { kind?: string }>(
  continue;
  }
  if (block.type === "tools" && last?.type === "tools") {
- const blockHasStateSurface = block.tools.some((tool) => tool.kind === "plan" || tool.kind === "todo");
- const lastHasStateSurface = last.tools.some((tool) => tool.kind === "plan" || tool.kind === "todo");
+ const blockHasStateSurface = block.tools.some((tool) => isStandaloneToolKind(tool.kind));
+ const lastHasStateSurface = last.tools.some((tool) => isStandaloneToolKind(tool.kind));
  if (!blockHasStateSurface && !lastHasStateSurface) {
  last.tools = [...last.tools, ...block.tools];
  last.thinking = mergeBlockThinking(last.thinking, block.thinking);

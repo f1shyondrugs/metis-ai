@@ -65,6 +65,7 @@ export function NotesVoid({
   const [error, setError] = useState("");
   const [projects, setProjects] = useState<NoteProjectOption[]>([]);
   const surfaceRef = useRef<HTMLDivElement | null>(null);
+  const todoInputRef = useRef<HTMLInputElement | null>(null);
   const searchInputRef = useRef<HTMLInputElement | null>(null);
   const saveTimers = useRef(new Map<string, number>());
   const loadAbortRef = useRef<AbortController | null>(null);
@@ -198,6 +199,12 @@ export function NotesVoid({
     window.addEventListener("ai-chat:notes-updated", refreshFromAgent);
     return () => window.removeEventListener("ai-chat:notes-updated", refreshFromAgent);
   }, [load]);
+
+  useEffect(() => {
+    if (!draftTodoNoteId) return;
+    todoInputRef.current?.focus();
+    todoInputRef.current?.select();
+  }, [draftTodoNoteId]);
 
   useEffect(() => {
     const focusSearch = () => {
@@ -513,6 +520,7 @@ export function NotesVoid({
   useEffect(() => {
     const surface = surfaceRef.current;
     if (!surface) return;
+    const wheelOptions = { capture: true, passive: false } as const;
     const handleWheel = (event: WheelEvent) => {
       const insideEditor = event.target instanceof Element && event.target.closest(".editable-markdown");
       if (insideEditor && !event.ctrlKey && !event.metaKey) return;
@@ -523,8 +531,24 @@ export function NotesVoid({
         setView((current) => ({ ...current, x: current.x - event.deltaX, y: current.y - event.deltaY }));
       }
     };
-    surface.addEventListener("wheel", handleWheel, { capture: true, passive: false });
-    return () => surface.removeEventListener("wheel", handleWheel, { capture: true });
+    const bindWheel = () => {
+      surface.removeEventListener("wheel", handleWheel, wheelOptions);
+      surface.addEventListener("wheel", handleWheel, wheelOptions);
+    };
+    const resetSurfaceInteraction = () => {
+      setDrag(null);
+      document.body.style.removeProperty("user-select");
+      document.body.style.removeProperty("cursor");
+      bindWheel();
+    };
+    bindWheel();
+    document.addEventListener("visibilitychange", resetSurfaceInteraction);
+    window.addEventListener("pageshow", resetSurfaceInteraction);
+    return () => {
+      surface.removeEventListener("wheel", handleWheel, wheelOptions);
+      document.removeEventListener("visibilitychange", resetSurfaceInteraction);
+      window.removeEventListener("pageshow", resetSurfaceInteraction);
+    };
   }, [zoomAt]);
 
   return (
@@ -596,7 +620,6 @@ export function NotesVoid({
         ref={surfaceRef}
         className={cn(
           "relative min-h-0 flex-1 touch-none overflow-hidden",
-          compact && "pointer-events-none",
         )}
         style={{
           backgroundColor: compact ? "transparent" : "var(--background)",
@@ -772,6 +795,72 @@ export function NotesVoid({
                 projects={projects}
                 onChange={(nextProjectId) => setNoteProject(note, nextProjectId)}
               />
+              <div className="relative shrink-0">
+                <Button
+                  type="button"
+                  size="icon-xs"
+                  variant="ghost"
+                  className="size-6 text-black/70 hover:bg-black/10"
+                  aria-label="Add todo"
+                  title="Add todo"
+                  onPointerDown={(event) => {
+                    event.stopPropagation();
+                    setFrontNoteId(note.id);
+                  }}
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    setFrontNoteId(note.id);
+                    setDraftTodoNoteId((current) => current === note.id ? null : note.id);
+                  }}
+                >
+                  <Plus className="size-3" />
+                </Button>
+                {draftTodoNoteId === note.id ? (
+                  <div
+                    className="absolute right-0 top-full z-20 mt-1 w-44 rounded-md border border-border bg-popover p-1 shadow-md"
+                    onPointerDown={(event) => event.stopPropagation()}
+                  >
+                    <input
+                      ref={todoInputRef}
+                      autoFocus
+                      className="h-6 w-full bg-transparent px-1 text-[11px] text-popover-foreground outline-none placeholder:text-muted-foreground"
+                      placeholder="Add a todo"
+                      aria-label="New todo"
+                      onKeyDown={(event) => {
+                        if (event.key === "Escape") {
+                          event.preventDefault();
+                          setDraftTodoNoteId(null);
+                          event.currentTarget.blur();
+                          return;
+                        }
+                        if (event.key !== "Enter") return;
+                        const content = event.currentTarget.value.trim();
+                        event.preventDefault();
+                        if (content) {
+                          commitTodos(note, [
+                            ...(note.todos || []),
+                            { id: `todo-${Date.now()}`, content, status: "pending" },
+                          ]);
+                          event.currentTarget.value = "";
+                        } else {
+                          setDraftTodoNoteId(null);
+                          event.currentTarget.blur();
+                        }
+                      }}
+                      onBlur={(event) => {
+                        const content = event.currentTarget.value.trim();
+                        if (content) {
+                          commitTodos(note, [
+                            ...(note.todos || []),
+                            { id: `todo-${Date.now()}`, content, status: "pending" },
+                          ]);
+                        }
+                        setDraftTodoNoteId((current) => current === note.id ? null : current);
+                      }}
+                    />
+                  </div>
+                ) : null}
+              </div>
               <Button
                 type="button"
                 size="icon-xs"
@@ -852,61 +941,6 @@ export function NotesVoid({
               className="shrink-0 space-y-1 px-2 pt-1.5"
               onPointerDown={(event) => event.stopPropagation()}
             >
-              <div className="flex items-center gap-1.5">
-                <button
-                  type="button"
-                  aria-label="Add todo"
-                  title="Add todo"
-                  className="flex size-5 shrink-0 items-center justify-center rounded-sm border border-black/25 bg-white/45 text-black/70 hover:bg-white/70 hover:text-black"
-                  onClick={(event) => {
-                    event.stopPropagation();
-                    setFrontNoteId(note.id);
-                    setDraftTodoNoteId(note.id);
-                  }}
-                >
-                  <Plus className="size-3" />
-                </button>
-                {draftTodoNoteId === note.id ? (
-                  <input
-                    autoFocus
-                    className="h-5 min-w-0 flex-1 bg-transparent text-[11px] text-black outline-none placeholder:text-black/40"
-                    placeholder="Add a todo"
-                    aria-label="New todo"
-                    onPointerDown={(event) => event.stopPropagation()}
-                    onBlur={(event) => {
-                      const content = event.currentTarget.value.trim();
-                      if (content) {
-                        commitTodos(note, [
-                          ...(note.todos || []),
-                          { id: `todo-${Date.now()}`, content, status: "pending" },
-                        ]);
-                      }
-                      setDraftTodoNoteId((current) => current === note.id ? null : current);
-                    }}
-                    onKeyDown={(event) => {
-                      if (event.key === "Escape") {
-                        event.preventDefault();
-                        setDraftTodoNoteId(null);
-                        event.currentTarget.blur();
-                        return;
-                      }
-                      if (event.key !== "Enter") return;
-                      const content = event.currentTarget.value.trim();
-                      event.preventDefault();
-                      if (content) {
-                        commitTodos(note, [
-                          ...(note.todos || []),
-                          { id: `todo-${Date.now()}`, content, status: "pending" },
-                        ]);
-                        event.currentTarget.value = "";
-                      } else {
-                        setDraftTodoNoteId(null);
-                        event.currentTarget.blur();
-                      }
-                    }}
-                  />
-                ) : null}
-              </div>
               {(note.todos || []).map((todo, index) => {
                 const done = todo.status === "completed";
                 return (
@@ -985,12 +1019,12 @@ export function NotesVoid({
           </article>
         ))}
         {!compact && status === "loading" ? (
-          <div className="absolute inset-0 flex items-center justify-center gap-2 p-8 text-center text-xs text-muted-foreground">
+          <div className="pointer-events-none absolute inset-0 flex items-center justify-center gap-2 p-8 text-center text-xs text-muted-foreground" aria-live="polite">
             <RefreshCw className="size-4 animate-spin" aria-hidden="true" />
             Loading notes…
           </div>
         ) : !compact && !visibleNotes.length ? (
-          <div className="absolute inset-0 flex items-center justify-center p-8 text-center text-xs text-muted-foreground">
+          <div className="pointer-events-none absolute inset-0 flex items-center justify-center p-8 text-center text-xs text-muted-foreground">
             No notes yet. Create one to share context with the agent.
           </div>
         ) : null}

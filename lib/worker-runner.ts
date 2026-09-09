@@ -11,11 +11,11 @@ import {
   type WorkspaceItem,
 } from "@/lib/db-store";
 import { getProject, projectContextBlock } from "@/lib/projects";
-import { skillsCatalogPrompt } from "@/lib/skills";
+import { alwaysOnSkillsPrompt, skillsCatalogPrompt } from "@/lib/skills";
 import { autoSkillActivationPrompt } from "@/lib/skill-routing";
 import { getUserAgentCwd, getMcpServers } from "@/lib/mcp";
 import { resolveAgentPath } from "@/lib/revert";
-import { appendRunEvent, drainNextQueuedMessage, enqueueJob, getJob, touchJob, updateJob } from "@/lib/db-jobs";
+import { appendRunEvent, enqueueJob, getJob, touchJob, updateJob } from "@/lib/db-jobs";
 import { canonicalizeToolPart } from "@/lib/providers/tool-events";
 import { logError } from "@/lib/error-logs";
 import { isModelAllowed } from "@/lib/model-access";
@@ -55,7 +55,7 @@ import { captureKnowledgeFromUserTurn } from "@/lib/knowledge-lifecycle";
 
 const AGENT_INIT_TIMEOUT_MS = 90_000;
 const AGENT_INACTIVITY_TIMEOUT_MS = 5 * 60_000;
-const AGENT_WAIT_TIMEOUT_MS = 90_000;
+const AGENT_WAIT_TIMEOUT_MS = 6 * 60_000;
 
 function telemetryCategory(message: string): TaskCategory {
   const kind = routeTask(message).kind;
@@ -992,6 +992,7 @@ export async function runQueuedJob(job: AgentJob) {
     metisAgentIdentity(),
     project ? projectContextBlock(project, job.userId) : "",
     skillsCatalogPrompt(getGlobalModelSettings(job.userId)),
+    alwaysOnSkillsPrompt(getGlobalModelSettings(job.userId)),
     autoSkillActivationPrompt(job.message, getGlobalModelSettings(job.userId), {
       hasVisualReference: Boolean(job.attachments?.some((attachment) => attachment.kind === "image")),
     }),
@@ -1074,10 +1075,20 @@ export async function runQueuedJob(job: AgentJob) {
       inactivityTimer = setTimeout(() => {
         inactivityTimer = undefined;
         const active = tools.filter((tool) => isActiveToolStatus(tool.status));
+        if (active.length) {
+          appendAgentTrace(job, "inactivity", {
+            reason: "active_tool",
+            action: "extend",
+            activeTools: active.map((tool) => ({ id: tool.id, name: tool.name, status: tool.status })),
+            textChars: text.length,
+          });
+          resetInactivityTimer();
+          return;
+        }
         const message = "No new output for 5 minutes; the run was aborted.";
         const payload = {
-          reason: active.length ? "active_tool" : "stream_gap",
-          activeTools: active.map((tool) => ({ id: tool.id, name: tool.name, status: tool.status })),
+          reason: "stream_gap",
+          activeTools: [] as Array<{ id: string; name: string; status: string }>,
           textChars: text.length,
           action: "abort",
         };
@@ -1498,7 +1509,7 @@ export async function runQueuedJob(job: AgentJob) {
     const result = await withTimeout(
       run.wait(),
       AGENT_WAIT_TIMEOUT_MS,
-      "The agent did not finish within 90 seconds after its stream ended.",
+      "The agent did not finish within 6 minutes after its stream ended.",
     );
     if (modelSwitchTarget) {
       closeRunningTools(tools, "cancelled");
@@ -1781,26 +1792,6 @@ export async function runQueuedJob(job: AgentJob) {
       agentId: agent.agentId,
       ...(resultError ? { error: resultError } : {}),
     });
-    if (!resultError) {
-      try {
-        const queuedJob = drainNextQueuedMessage(job.chatId, job.userId);
-        if (queuedJob) {
-          appendRunEvent(job.id, job.chatId, job.userId, "status", {
-            status: "queued_next",
-            jobId: queuedJob.id,
-          });
-        }
-      } catch (error) {
-        void logError({
-          level: "warn",
-          source: "worker",
-          chatId: job.chatId,
-          userId: job.userId || undefined,
-          message: `Queued follow-up could not start automatically: ${error instanceof Error ? error.message : String(error)}`,
-          context: { jobId: job.id },
-        });
-      }
-    }
   if (!job.incognito && !chat.incognito) createSnapshot({
       chatId: job.chatId,
       ...(job.userId ? { ownerId: job.userId } : {}),

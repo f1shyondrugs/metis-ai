@@ -5,7 +5,7 @@ import {
   loadContextScope,
   resolveScopeReferences,
 } from "@/lib/context-scope";
-import { skillsCatalogPrompt } from "@/lib/skills";
+import { alwaysOnSkillsPrompt, skillsCatalogPrompt } from "@/lib/skills";
 import { autoSkillActivationPrompt } from "@/lib/skill-routing";
 import { METIS_SHARED_AGENT_CONTROL, toolContractPrompt } from "@/lib/agent-control";
 import { metisAgentIdentity } from "@/lib/agent-identity";
@@ -135,6 +135,7 @@ export function buildProviderPrompt(input: ProviderPromptContext): string {
     // Layer 1 — Core Context: stable identity, policy, mode and tool contract.
     metisAgentIdentity(),
     skillsCatalogPrompt(getGlobalModelSettings(ownerId)),
+    alwaysOnSkillsPrompt(getGlobalModelSettings(ownerId)),
     autoSkillActivationPrompt(job.message, getGlobalModelSettings(ownerId), {
       hasVisualReference: Boolean(job.attachments?.some((attachment) => attachment.kind === "image")),
     }),

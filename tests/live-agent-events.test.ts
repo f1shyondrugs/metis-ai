@@ -89,13 +89,24 @@ test("completed runs hand the durable queue back to the server scheduler", () =>
   assert.match(jobs, /claimQueuedMessageInTransaction/);
   assert.match(jobs, /export function getActiveParentJob/);
   assert.match(jobs, /json_extract\(data, '\$\.parentJobId'\) IS NULL/);
-  assert.match(cursorWorker, /drainNextQueuedMessage\(job\.chatId, job\.userId\)/);
+  assert.doesNotMatch(cursorWorker, /drainNextQueuedMessage\(/);
   assert.match(worker, /drainNextQueuedMessage\(chatId, userId\)/);
-  assert.match(worker, /getActiveParentJob\(chatId, userId\)/);
-  assert.match(provider, /drainNextQueuedMessage\(job\.chatId, job\.userId\)/);
-  assert.match(chatRoute, /drainNextQueuedMessage\(id, ownerId\)/);
+  assert.match(worker, /getActiveParentJob\(chatId\)/);
+  assert.match(worker, /drainPersistedChatQueues\(\);/);
+  assert.doesNotMatch(provider, /drainNextQueuedMessage\(/);
+  assert.doesNotMatch(chatRoute, /drainNextQueuedMessage\(/);
   assert.match(store, /consumedIds\.has\(item\.id\)/);
   assert.match(shell, /consumed.has\(item.id\)/);
+  assert.match(shell, /removedIdsFor\(/);
+  assert.match(shell, /removedIds: removedIdsFor\(chatId\)/);
+  assert.match(shell, /removedIds: removedQueueIdsRef\.current\.get\(id\)/);
+});
+
+test("live snapshots keep the optimistic model and merge queue tombstones", () => {
+  const shell = readFileSync(path.join(root, "components", "app-shell.tsx"), "utf8");
+  assert.match(shell, /if \(!runtimeRef\.current\.has\(id\)\) \{[\s\S]*?setModelId\(next\.modelId\)/);
+  assert.match(shell, /const liveRun = runtimeRef\.current\.has\(activeChatId\);\s*if \(data\.chat\.modelId && !liveRun\)/);
+  assert.doesNotMatch(shell, /if \(data\.chat\.modelId\) setModelId\(data\.chat\.modelId\)/);
 });
 
 test("terminal events and chat state commit before the worker lease is released", () => {

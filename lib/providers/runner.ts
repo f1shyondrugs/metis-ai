@@ -25,7 +25,7 @@ import {
 } from "@/lib/providers/adapters/provider-support";
 import { modelKey, parseModelKey } from "@/lib/providers/types";
 import type { AgentJob } from "@/lib/jobs";
-import { appendRunEvent, drainNextQueuedMessage, getJob, touchJob, updateJob } from "@/lib/db-jobs";
+import { appendRunEvent, getJob, touchJob, updateJob } from "@/lib/db-jobs";
 import { modeById } from "@/lib/modes";
 import { estimateProviderInputTokens } from "@/lib/providers/adapters/provider-support";
 import { logError } from "@/lib/error-logs";
@@ -502,25 +502,6 @@ export async function runAlternativeProviderJob(
       ...(result.agentId ? { agentId: result.agentId } : {}),
     });
     completionCommitted = true;
-    let queuedJobId: string | undefined;
-    try {
-      queuedJobId = drainNextQueuedMessage(job.chatId, job.userId)?.id;
-    } catch (error) {
-      void logError({
-        level: "warn",
-        source: "worker",
-        chatId: job.chatId,
-        userId: job.userId || undefined,
-        message: `Queued follow-up could not start automatically: ${error instanceof Error ? error.message : String(error)}`,
-        context: { jobId: job.id },
-      });
-    }
-    if (queuedJobId) {
-      appendRunEvent(job.id, job.chatId, job.userId, "status", {
-        status: "queued_next",
-        jobId: queuedJobId,
-      });
-    }
   } catch (error) {
     if (modelSwitchTarget && handoffModelSwitch()) return true;
     if (completionCommitted) {

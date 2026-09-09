@@ -36,13 +36,26 @@ test("mobile keyboard positioning compensates only for viewport area not already
   assert.match(shell, /composerFocused && \"max-md:fixed/);
 });
 
-test("Tasks render outside the collapsible edit/tool activity", () => {
+test("created-entity embeds render outside the collapsible edit/tool activity", () => {
   const activityStart = toolGroup.indexOf("const activityRunning");
-  const todoSurface = toolGroup.indexOf("{todoTools.map((tool, index) => (", activityStart);
   const activityBranch = toolGroup.indexOf("{regularEntries.length === 1", activityStart);
   const groupOpen = toolGroup.indexOf("{groupOpen ? (", activityStart);
   const regularNested = toolGroup.indexOf("{regularEntries.map((tool, index) => (", groupOpen);
-  assert.ok(activityStart >= 0 && todoSurface > activityStart && todoSurface < activityBranch);
+  assert.ok(activityStart >= 0 && activityBranch > activityStart);
+  for (const surface of ["planTools", "noteTools", "automationTools", "canvasTools", "todoTools"]) {
+    const marker = `{${surface}.map((tool`;
+    const position = toolGroup.indexOf(marker, activityStart);
+    assert.ok(position > activityStart && position < activityBranch, `${surface} should be outside the group`);
+    assert.equal(toolGroup.slice(groupOpen, regularNested).includes(marker), false);
+  }
   assert.ok(groupOpen >= 0 && regularNested > groupOpen);
-  assert.equal(toolGroup.slice(groupOpen, regularNested).includes("{todoTools.map((tool, index) => ("), false);
+  assert.equal(toolGroup.slice(groupOpen, regularNested).includes("canvasTools"), false);
+});
+
+test("an embed and read_file keep the embed outside the collapsible group", () => {
+  const activityStart = toolGroup.indexOf("const activityRunning");
+  const embedBeforeGroup = toolGroup.indexOf("{planTools.map((tool", activityStart);
+  const regularNested = toolGroup.indexOf("{regularEntries.map((tool, index) => (", toolGroup.indexOf("{groupOpen ? (", activityStart));
+  assert.ok(embedBeforeGroup >= 0 && embedBeforeGroup < regularNested);
+  assert.match(toolGroup.slice(regularNested), /renderTool\(tool, true\)/);
 });
