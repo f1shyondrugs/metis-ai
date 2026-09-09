@@ -203,8 +203,8 @@ test("Cursor send includes native vision images and persists queued follow-ups s
   const worker = readFileSync(new URL("../worker.ts", import.meta.url), "utf8");
   const shell = readFileSync(new URL("../components/app-shell.tsx", import.meta.url), "utf8");
   assert.match(uploads, /export function visionImagesForAttachments/);
-  assert.match(workerSource, /visionImages\.length \? \{ text: prompt, images: visionImages \}/);
-  assert.match(worker, /queuedAttachments\.length \? "\(see attachments\)"/);
+  assert.match(worker, /drainNextQueuedMessage\(chatId, userId\)/);
+  assert.match(worker, /getActiveParentJob\(chatId, userId\)/);
   assert.match(worker, /drainPersistedChatQueues\(\);/);
   assert.match(shell, /function persistQueuedFollowUps/);
   assert.match(shell, /keepalive: true/);

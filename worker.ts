@@ -2,9 +2,9 @@ import { randomUUID } from "node:crypto";
 import { resolve } from "node:path";
 import { spawn } from "node:child_process";
 import { writeWorkerHeartbeat } from "@/lib/worker-health";
-import { appendRunEvent, cancelChildJobs, claimNextJob, enqueueJob, getActiveJob, getJob, listChildJobs, reapExpiredJobLeases, recoverStaleJobs, requeueSwitchingJob, updateJob } from "@/lib/db-jobs";
+import { appendRunEvent, cancelChildJobs, claimNextJob, drainNextQueuedMessage, enqueueJob, getActiveParentJob, getJob, listChildJobs, reapExpiredJobLeases, recoverStaleJobs, requeueSwitchingJob, updateJob } from "@/lib/db-jobs";
 import { snapshotInterruptedJob } from "@/lib/recovery";
-import { appendMessage, appendMessageInTransaction, getChat, listChatsWithQueuedMessages, removeQueuedMessage, updateChat, upsertMessage } from "@/lib/db-store";
+import { appendMessage, getChat, listChatsWithQueuedMessages, updateChat, upsertMessage } from "@/lib/db-store";
 import { expirePendingQuestions } from "@/lib/db-questions";
 import {
   claimDueAutomations,
@@ -301,69 +301,17 @@ function reconcileJobLifecycle(jobId: string) {
 }
 
 function enqueuePersistedChatFollowUp(chatId: string, userId?: string) {
-  if (getActiveJob(chatId, userId)) return null;
-  const chat = getChat(chatId, userId);
-  const queued = chat?.queuedMessages?.[0];
-  const queuedText = queued?.text.trim() || "";
-  const queuedAttachments = queued?.attachments || [];
-  if (!chat || !queued || (!queuedText && !queuedAttachments.length)) return null;
-
-  let job;
+  if (getActiveParentJob(chatId, userId)) return null;
   try {
-    job = enqueueJob({
-      chatId: chat.id,
-      userId: chat.ownerId || userId,
-      message: queuedText || (queuedAttachments.length ? "(see attachments)" : ""),
-      messageId: queued.id,
-      ...(queued.referenceText ? { referenceText: queued.referenceText } : {}),
-      ...(queued.references?.length
-        ? {
-            references: queued.references.map(({ source: _source, ...reference }) => reference),
-          }
-        : {}),
-      ...(chat.agentId ? { agentId: chat.agentId } : {}),
-      ...(chat.modelId ? { modelId: chat.modelId } : {}),
-      ...(chat.modelParams?.length ? { modelParams: chat.modelParams } : {}),
-      ...(chat.sessionState?.modeId ? { modeId: chat.sessionState.modeId } : {}),
-      ...(chat.incognito ? { incognito: true } : {}),
-      ...(queuedAttachments.length ? { attachments: queuedAttachments } : {}),
-    }, {
-      beforeInsert: () => {
-        const appended = appendMessageInTransaction(chat.id, {
-          id: queued.id,
-          role: "user",
-          content: queuedText || (queuedAttachments.length ? `Attached ${queuedAttachments.length} file${queuedAttachments.length === 1 ? "" : "s"}` : ""),
-        ...(queuedAttachments.length ? { attachments: queuedAttachments } : {}),
-          ...(queued.referenceText ? { referenceText: queued.referenceText } : {}),
-          ...(queued.references?.length ? { references: queued.references } : {}),
-        }, chat.ownerId || userId);
-        if (!appended) throw new Error("Chat disappeared while draining its queued message.");
-      },
-    });
+    const job = drainNextQueuedMessage(chatId, userId);
+    if (job) {
+      console.log(`[ai-chat-worker] drained queued chat message -> ${job.id} (${chatId})`);
+    }
+    return job;
   } catch (error) {
     if (error instanceof Error && error.name === "ActiveChatRun") return null;
     throw error;
   }
-
-  // Remove only after durable enqueue. If this process dies between enqueue and
-  // removal, messageId idempotency makes the next drain harmless.
-  removeQueuedMessage(chat.id, queued.id, chat.ownerId || userId);
-  if (["completed", "cancelled", "error", "interrupted"].includes(job.status)) {
-    console.log(`[ai-chat-worker] removed stale queued message ${queued.id}; job ${job.id} is already ${job.status}`);
-    return job;
-  }
-  updateChat(chat.id, {
-    runStatus: "running",
-    runUpdatedAt: new Date().toISOString(),
-    queueMessage: job.queueMessage || null,
-    badge: null,
-  }, chat.ownerId || userId);
-  appendRunEvent(job.id, chat.id, chat.ownerId || userId, "status", {
-    status: "queued",
-    message: "Queued follow-up accepted by the server and will run in chat order.",
-  });
-  console.log(`[ai-chat-worker] drained queued chat message ${queued.id} -> ${job.id} (${chat.id})`);
-  return job;
 }
 
 function drainPersistedChatQueues() {

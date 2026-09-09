@@ -614,7 +614,11 @@ export function updateChat(
         }))
         .filter((item) => item.text.trim() || (Array.isArray(item.attachments) && item.attachments.length))
         .slice(0, 50);
-      if (queued.length) next.queuedMessages = queued;
+      const consumedIds = new Set(
+        next.messages.filter((message) => message.role === "user").map((message) => message.id),
+      );
+      const pending = queued.filter((item) => !consumedIds.has(item.id));
+      if (pending.length) next.queuedMessages = pending;
       else delete next.queuedMessages;
     }
     if (patch.pinned !== undefined) {

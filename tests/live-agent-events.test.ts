@@ -79,12 +79,23 @@ test("workspace creation schemas require real content and worker loads deploy ov
 
 test("completed runs hand the durable queue back to the server scheduler", () => {
   const jobs = readFileSync(path.join(root, "lib", "db-jobs.ts"), "utf8");
-  const worker = readFileSync(path.join(root, "lib", "worker-runner.ts"), "utf8");
+  const cursorWorker = readFileSync(path.join(root, "lib", "worker-runner.ts"), "utf8");
+  const worker = readFileSync(path.join(root, "worker.ts"), "utf8");
   const provider = readFileSync(path.join(root, "lib", "providers", "runner.ts"), "utf8");
+  const chatRoute = readFileSync(path.join(root, "app", "api", "chats", "[id]", "route.ts"), "utf8");
+  const store = readFileSync(path.join(root, "lib", "db-store.ts"), "utf8");
+  const shell = readFileSync(path.join(root, "components", "app-shell.tsx"), "utf8");
   assert.match(jobs, /export function drainNextQueuedMessage/);
   assert.match(jobs, /claimQueuedMessageInTransaction/);
-  assert.match(worker, /drainNextQueuedMessage\(job\.chatId, job\.userId\)/);
+  assert.match(jobs, /export function getActiveParentJob/);
+  assert.match(jobs, /json_extract\(data, '\$\.parentJobId'\) IS NULL/);
+  assert.match(cursorWorker, /drainNextQueuedMessage\(job\.chatId, job\.userId\)/);
+  assert.match(worker, /drainNextQueuedMessage\(chatId, userId\)/);
+  assert.match(worker, /getActiveParentJob\(chatId, userId\)/);
   assert.match(provider, /drainNextQueuedMessage\(job\.chatId, job\.userId\)/);
+  assert.match(chatRoute, /drainNextQueuedMessage\(id, ownerId\)/);
+  assert.match(store, /consumedIds\.has\(item\.id\)/);
+  assert.match(shell, /consumed.has\(item.id\)/);
 });
 
 test("terminal events and chat state commit before the worker lease is released", () => {

@@ -264,15 +264,29 @@ export function drainNextQueuedMessage(chatId: string, userId?: string) {
 }
 
 export function getActiveJob(chatId: string, userId?: string) {
+  return getActiveJobRow(chatId, userId, false);
+}
+
+/** Active run for the chat itself, ignoring subagent child jobs. */
+export function getActiveParentJob(chatId: string, userId?: string) {
+  return getActiveJobRow(chatId, userId, true);
+}
+
+function getActiveJobRow(chatId: string, userId: string | undefined, parentOnly: boolean) {
   const row = getDatabase()
     .prepare(
       `SELECT data FROM jobs
        WHERE chat_id = ?
          AND status IN ('queued', 'running', 'switching', 'waiting_input', 'waiting_for_user')
          AND (? IS NULL OR user_id = ?)
+         AND (
+           ? = 0
+           OR json_extract(data, '$.parentJobId') IS NULL
+           OR json_extract(data, '$.parentJobId') = ''
+         )
        ORDER BY updated_at DESC LIMIT 1`,
     )
-    .get(chatId, userId ?? null, userId ?? null);
+    .get(chatId, userId ?? null, userId ?? null, parentOnly ? 1 : 0);
   return parseData<AgentJob>(row);
 }
 

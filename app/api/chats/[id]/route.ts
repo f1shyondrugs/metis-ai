@@ -9,7 +9,7 @@ import {
 } from "@/lib/db-store";
 import type { ChatSessionState } from "@/lib/store";
 import type { ChatBadge } from "@/lib/store";
-import { requestJobModelSwitch } from "@/lib/db-jobs";
+import { requestJobModelSwitch, drainNextQueuedMessage, getActiveParentJob } from "@/lib/db-jobs";
 import { isModelAllowed } from "@/lib/model-access";
 
 export const runtime = "nodejs";
@@ -124,6 +124,13 @@ export async function PATCH(req: Request, { params }: Params) {
   }
   if (!chat) {
     return Response.json({ error: "Not found" }, { status: 404 });
+  }
+  if (Array.isArray(body.queuedMessages) && body.queuedMessages.length && !getActiveParentJob(id, ownerId)) {
+    try {
+      drainNextQueuedMessage(id, ownerId);
+    } catch (error) {
+      if (!(error instanceof Error) || error.name !== "ActiveChatRun") throw error;
+    }
   }
   const modelSwitch = requestedModelId
     ? requestJobModelSwitch(

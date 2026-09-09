@@ -5237,21 +5237,7 @@ export default function AppShell({ defaultCwd }: { defaultCwd: string }) {
 
   useEffect(() => {
     if (!activeChatId || isDraft || loadingChatId) return;
-    const timer = window.setTimeout(() => {
-      void fetch(`/api/chats/${activeChatId}`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          queuedMessages: queuedMessages.map(({ id, text, referenceText, references, storedAttachments }) => ({
-            id,
-            text,
-            ...(referenceText ? { referenceText } : {}),
-            ...(references?.length ? { references } : {}),
-          ...(storedAttachments?.length ? { attachments: storedAttachments } : {}),
-          })),
-        }),
-      });
-    }, 400);
+    const timer = window.setTimeout(() => persistQueuedFollowUps(queuedMessages), 400);
     return () => window.clearTimeout(timer);
   }, [activeChatId, isDraft, loadingChatId, queuedMessages]);
 
@@ -6298,11 +6284,16 @@ export default function AppShell({ defaultCwd }: { defaultCwd: string }) {
   function persistQueuedFollowUps(items: QueuedMessage[]) {
     const chatId = activeChatIdRef.current;
     if (!chatId) return;
+    const consumed = new Set<string>([
+      ...queuedSendRef.current,
+      ...stateRef.current.messages.filter((message) => message.role === "user").map((message) => message.id),
+    ]);
+    const payload = items.filter((item) => !consumed.has(item.id));
     void fetch(`/api/chats/${chatId}`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        queuedMessages: items.map(({ id, text, referenceText, references, storedAttachments }) => ({
+        queuedMessages: payload.map(({ id, text, referenceText, references, storedAttachments }) => ({
           id,
           text,
           ...(referenceText ? { referenceText } : {}),
@@ -7527,7 +7518,7 @@ export default function AppShell({ defaultCwd }: { defaultCwd: string }) {
   useEffect(() => {
     if (!activeChatIdRef.current || !queuedMessages.length) return;
     persistQueuedFollowUps(queuedMessages);
-  }, [queuedMessages]);
+  }, [queuedMessages, busy, pendingQuestion]);
 
   useEffect(() => {
     const flush = () => persistQueuedFollowUps(queuedMessages);
