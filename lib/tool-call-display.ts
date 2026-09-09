@@ -1,3 +1,5 @@
+import { isSubagentControlName, isSubagentSpawnName } from "@/lib/subagent-bar";
+
 function joinAssistantText(left: string, right: string): string {
   if (!left) return right;
   if (!right) return left;
@@ -193,7 +195,8 @@ export function classifyToolKind(name: string, input?: unknown, result?: unknown
   if (/(browser|navigate|playwright|webfetch)/.test(value)) return "browser";
   if (value.includes("edit_plan") || /\bcreate_plan\b/.test(value)) return "plan";
   if (value.includes("edit_canvas") || /\bcreate_canvas\b/.test(value)) return "canvas";
-  if (/(subagent|delegate|\btask\b)/.test(value) || /\bagents?\b/.test(inner.toLowerCase())) return "subagent";
+  if (isSubagentControlName(value) || isSubagentControlName(inner)) return "mcp";
+  if (isSubagentSpawnName(value) || isSubagentSpawnName(inner)) return "subagent";
   if (/\bplan\b/.test(value)) return "plan";
   if (/(edit|write|patch|replace|create_file|delete|remove|unlink)/.test(value)) return "edit";
   if (/(read|search|list|glob|grep)/.test(value)) return "read";

@@ -40,3 +40,15 @@ test("non-subagent tools do not get delegation metadata", () => {
     undefined,
   );
 });
+
+test("subagent_status does not become durable subagent metadata", () => {
+  assert.equal(
+    subagentMetadataFromTool(
+      "subagent_status",
+      { agentId: "job-child-1" },
+      { agentId: "job-child-1", chatId: "chat-child-1", status: "running" },
+      "subagent",
+    ),
+    undefined,
+  );
+});

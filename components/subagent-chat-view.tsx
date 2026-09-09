@@ -28,6 +28,7 @@ function promptText(tool: ToolPart): string {
 export function SubagentChatView({ tool, onBack, onCancel, cancelling = false, sidebarWidth = 0 }: Props) {
   const [liveTool, setLiveTool] = useState<ToolPart | null>(null);
   const [leaving, setLeaving] = useState(false);
+  const [ready, setReady] = useState(!tool.subagent?.chatId);
   const onBackRef = useRef(onBack);
   onBackRef.current = onBack;
 
@@ -46,12 +47,18 @@ export function SubagentChatView({ tool, onBack, onCancel, cancelling = false, s
     const childChatId = tool.subagent?.chatId;
     if (!childChatId) {
       setLiveTool(null);
+      setReady(true);
       return;
     }
     let cancelled = false;
     let timer: number | undefined;
+    setReady(false);
     const poll = async () => {
       try {
+        if (typeof document !== "undefined" && document.visibilityState === "hidden") {
+          timer = window.setTimeout(() => void poll(), 1600);
+          return;
+        }
         const response = await fetch(`/api/chats/${encodeURIComponent(childChatId)}?messageLimit=50`, { cache: "no-store" });
         if (!response.ok || cancelled) return;
         const data = await response.json() as {
@@ -62,6 +69,7 @@ export function SubagentChatView({ tool, onBack, onCancel, cancelling = false, s
         };
         const chat = data.chat;
         if (!chat || cancelled) return;
+        setReady(true);
         const active = ["running", "paused", "waiting_for_user", "waiting_input"].includes(chat.runStatus || "");
         const childMessages = (chat.messages || []).flatMap((message, index) => {
           const role = message.role || "assistant";
@@ -145,7 +153,15 @@ export function SubagentChatView({ tool, onBack, onCancel, cancelling = false, s
       </header>
 
       <div className="messages-composer-mask min-h-0 flex-1 overflow-y-auto" style={{ ["--composer-mask-size" as string]: "9rem" }}>
-        <div className="mx-auto w-full max-w-2xl space-y-6 px-4 pt-6 sm:px-6" style={{ paddingBottom: 144 }}>
+        {!ready ? (
+          <div className="flex h-full min-h-[420px] items-center justify-center" role="status" aria-label="Loading chat">
+            <div className="flex items-center gap-3 text-sm text-muted-foreground">
+              <LoaderCircle className="size-5 animate-spin" />
+              <span>Loading chat…</span>
+            </div>
+          </div>
+        ) : null}
+        {ready ? <div className="mx-auto w-full max-w-2xl space-y-6 px-4 pt-6 sm:px-6" style={{ paddingBottom: 144 }}>
           {prompt ? (
             <div className="flex flex-col items-end gap-1">
               <div className="max-w-[85%] space-y-2 rounded-xl bg-secondary/70 px-4 py-2.5 text-[15px] leading-relaxed">
@@ -198,7 +214,7 @@ export function SubagentChatView({ tool, onBack, onCancel, cancelling = false, s
           {!viewBlocks.length ? (
             <p className="text-sm text-muted-foreground">{tool.detail || "Waiting for the subagent to respond…"}</p>
           ) : null}
-        </div>
+        </div> : null}
       </div>
       <div className="pointer-events-none absolute inset-x-0 bottom-0 z-20">
         <div className="pointer-events-none pb-4 pt-3">

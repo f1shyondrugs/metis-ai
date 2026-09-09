@@ -294,10 +294,66 @@ export function formatContextWindow(tokens: number | undefined | null): string {
   return String(Math.round(snapped));
 }
 
+function finitePositiveTokens(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) && value > 0
+    ? Math.round(value)
+    : undefined;
+}
+
+function isCompactionPart(part: {
+  type?: string;
+  kind?: string;
+  name?: string;
+  status?: string;
+  afterTokens?: number;
+} | null | undefined) {
+  if (!part) return false;
+  return (
+    part.type === "compaction" ||
+    part.kind === "compaction" ||
+    part.name === "context_compaction"
+  );
+}
+
+/** Latest completed compaction after-count. This is the remaining prompt size. */
+export function latestCompactionAfterTokens(
+  chat: {
+    messages?: Array<{
+      parts?: Array<{
+        type?: string;
+        kind?: string;
+        name?: string;
+        status?: string;
+        afterTokens?: number;
+      }>;
+    }>;
+  } | null | undefined,
+): number | undefined {
+  const messages = chat?.messages || [];
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const parts = messages[index]?.parts;
+    if (!Array.isArray(parts)) continue;
+    for (let partIndex = parts.length - 1; partIndex >= 0; partIndex -= 1) {
+      const part = parts[partIndex];
+      if (!isCompactionPart(part) || part.status !== "completed") continue;
+      const after = finitePositiveTokens(part.afterTokens);
+      if (after) return after;
+    }
+  }
+  return undefined;
+}
+
 export function lastMeasuredInputTokens(
   chat: {
     contextUsedTokens?: number;
     messages?: Array<{
+      parts?: Array<{
+        type?: string;
+        kind?: string;
+        name?: string;
+        status?: string;
+        afterTokens?: number;
+      }>;
       runMetadata?: {
         inputTokens?: number;
         contextUsedTokens?: number;
@@ -306,16 +362,27 @@ export function lastMeasuredInputTokens(
     }>;
   } | null | undefined,
 ): number | undefined {
-  const fromChat = chat?.contextUsedTokens;
-  if (typeof fromChat === "number" && Number.isFinite(fromChat) && fromChat > 0) return fromChat;
+  const after = latestCompactionAfterTokens(chat);
+  const fromChat = finitePositiveTokens(chat?.contextUsedTokens);
+  let fromMetaContext: number | undefined;
+  let fromMetaRaw: number | undefined;
   const messages = chat?.messages || [];
   for (let index = messages.length - 1; index >= 0; index -= 1) {
     const meta = messages[index]?.runMetadata;
-    const tokens =
-      meta?.contextUsedTokens ??
-      meta?.totalProcessedTokens ??
-      meta?.inputTokens;
-    if (typeof tokens === "number" && Number.isFinite(tokens) && tokens > 0) return tokens;
+    const used = finitePositiveTokens(meta?.contextUsedTokens);
+    if (used) {
+      fromMetaContext = used;
+      break;
+    }
+    const raw = finitePositiveTokens(meta?.inputTokens);
+    if (raw && fromMetaRaw === undefined) fromMetaRaw = raw;
   }
-  return undefined;
+  const stored = fromChat ?? fromMetaContext;
+  // Pre-compaction provider totals (inputTokens / totalProcessedTokens) stay huge.
+  // Prefer the compaction after-count unless a later used-count is in the same band.
+  if (after) {
+    if (!stored || stored > after * 1.25) return after;
+    return stored;
+  }
+  return stored ?? fromMetaRaw;
 }

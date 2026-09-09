@@ -59,9 +59,8 @@ test("manual upward scrolling disables streaming auto-pin", () => {
   assert.match(shell, /event\.deltaY >= 0/);
   assert.match(shell, /userDetachedFromBottomRef\.current = true/);
   assert.match(shell, /stickToBottomRef\.current = false/);
-  assert.match(shell, /scrolledUp && !layoutResetToTop/);
-  assert.match(shell, /userScrollInputRef\.current && scrolledDown && atBottom/);
-  assert.match(shell, /if \(userDetachedFromBottomRef\.current \|\| userScrollInputRef\.current\) return/);
+  assert.match(shell, /transcriptScrollAction/);
+  assert.match(shell, /shouldPinOpenedChat/);
   assert.match(shell, /el\.addEventListener\("wheel", suspendAutoScrollOnWheel/);
   assert.match(shell, /el\.addEventListener\("touchmove", suspendAutoScrollOnTouch/);
   assert.match(shell, /if \(y > lastTouchY \+ 2\) detachFromBottom\(\)/);
@@ -71,19 +70,23 @@ test("manual upward scrolling disables streaming auto-pin", () => {
 test("opening a chat pins the transcript to the bottom and does not page history while pinning", () => {
   assert.match(shell, /enteringChatRef\.current = true/);
   assert.match(shell, /enteringChatRef\.current = false/);
+  assert.match(shell, /useLayoutEffect\(\(\) => \{[\s\S]*?pinMessagesToBottom/);
+  assert.match(shell, /pinScrollTop\(/);
+  assert.match(shell, /\[overflow-anchor:none\]/);
   assert.doesNotMatch(shell, /if \(!loadingChatId\) enteringChatRef\.current = false/);
   assert.match(shell, /layoutResetToTop/);
   assert.match(shell, /if \(el\.scrollTop < 80\) void loadEarlierMessagesRef\.current\(\)/);
   assert.match(shell, /new ResizeObserver\(pinIfStuckToBottom\)/);
   assert.match(shell, /if \(enteringChatRef\.current\) return/);
-  assert.match(shell, /userDetachedFromBottomRef\.current \|\| userScrollInputRef\.current/);
 });
 
 test("completed and stale historical subagents are not shown as still running", () => {
   assert.match(shell, /sourceMessageIsLatestAssistant/);
   assert.match(shell, /Date\.now\(\) - createdAt > 15 \* 60_000/);
   assert.match(shell, /tool\.result === undefined && !isStaleHistoricalSubagent\(tool\)/);
-  assert.match(shell, /const runningSubagents = subagentOutputs\.filter\(isLiveTool\)/);
+  assert.match(shell, /const runningSubagents = subagentOutputs\.filter\(\(tool\) =>/);
+  assert.match(shell, /isBarSubagentLive\(tool, childRunByChatId/);
+  assert.match(shell, /isChatBarSubagent\(part\)/);
   assert.match(shell, /some\(\(part\) => part\.type === "tool" && isLiveTool\(part\)\)/);
   assert.match(shell, /aria-label=\{`Stop subagent \$\{tool\.subagent\.title \|\| tool\.name\}`\}/);
   assert.match(shell, /onClick=\{\(\) => void cancelSubagent\(tool\)\}/);

@@ -114,3 +114,33 @@ test("lastMeasuredInputTokens prefers contextUsedTokens over estimates", () => {
     messages: [{ runMetadata: { inputTokens: 3 } }],
   }), 12_000);
 });
+
+test("lastMeasuredInputTokens uses compaction after-count instead of a stale 1.86M total", () => {
+  assert.equal(
+    lastMeasuredInputTokens({
+      contextUsedTokens: 1_859_532,
+      messages: [{
+        parts: [{
+          type: "compaction",
+          status: "completed",
+          afterTokens: 122_909,
+        }],
+        runMetadata: {
+          inputTokens: 1_859_532,
+          totalProcessedTokens: 1_859_532,
+          contextUsedTokens: 1_859_532,
+        },
+      }],
+    }),
+    122_909,
+  );
+  assert.equal(
+    lastMeasuredInputTokens({
+      messages: [{
+        parts: [{ type: "compaction", status: "completed", afterTokens: 122_909 }],
+        runMetadata: { contextUsedTokens: 140_000 },
+      }],
+    }),
+    140_000,
+  );
+});

@@ -11,6 +11,7 @@ import {
   useLayoutEffect,
   useRef,
   useState,
+  startTransition,
   type PointerEvent as ReactPointerEvent,
 } from "react";
 import { useSearchParams } from "next/navigation";
@@ -120,8 +121,15 @@ import {
   contextWindowForModel,
   contextWindowForSelection,
   estimateContextTokens,
+  lastMeasuredInputTokens,
   resolveContextTotal,
 } from "@/lib/context-window";
+import {
+  dedupeChatBarSubagents,
+  isBarSubagentLive,
+  isChatBarSubagent,
+  isChildRunLive,
+} from "@/lib/subagent-bar";
 import { PlanToolCallCard, ToolCallGroup, type ActivityEntry, type ToolCallData } from "@/components/tool-call-chip";
 import { classifyToolKind, isToolRunning, layoutAssistantParts, mergeChatMessages, remoteClientHostnameMap, todosFromToolPayload } from "@/lib/tool-call-display";
 import { stripTranscriptDump } from "@/lib/agent-transcript";
@@ -135,6 +143,7 @@ import {
   shouldIgnoreComposerEnter,
   shouldStartQueuedFollowUp,
 } from "@/lib/composer-send";
+import { pinScrollTop, shouldPinOpenedChat, transcriptScrollAction } from "@/lib/chat-scroll";
 import { getMetisDeviceId } from "@/lib/metis-device";
 import {
   clearClientChatSnapshots,
@@ -1917,8 +1926,10 @@ export default function AppShell({ defaultCwd }: { defaultCwd: string }) {
   const [workspaceMounted, setWorkspaceMounted] = useState(false);
   const [workspaceTab, setWorkspaceTab] = useState<"canvas" | "plan" | "terminal" | "files" | "browser" | "monitor">("canvas");
   const [notesOpen, setNotesOpen] = useState(false);
+  const suppressNotesRouteRef = useRef(false);
   const [automationsOpen, setAutomationsOpen] = useState(false);
   const [focusedNoteId, setFocusedNoteId] = useState<string | null>(null);
+  const [childRunByChatId, setChildRunByChatId] = useState<Record<string, string>>({});
   const [focusedAutomationId, setFocusedAutomationId] = useState<string | null>(null);
   const [projectHomeId, setProjectHomeId] = useState<string | null>(null);
   const [draftProjectId, setDraftProjectId] = useState<string | null>(null);
@@ -2891,15 +2902,17 @@ export default function AppShell({ defaultCwd }: { defaultCwd: string }) {
       .filter((part) => part.kind === "shell" || part.kind === "read" || part.kind === "edit"),
   );
   const latestAssistantMessage = [...messages].reverse().find((message) => message.role === "assistant");
-  const subagentOutputs = messages.flatMap((message) =>
-    (message.parts ?? partsFromFlat(message))
-      .filter((part): part is ToolMsgPart => part.type === "tool")
-      .filter((part) => part.kind === "subagent")
-      .map((part) => ({
-        ...part,
-        sourceMessageCreatedAt: message.createdAt,
-        sourceMessageIsLatestAssistant: message.id === latestAssistantMessage?.id,
-      })),
+  const subagentOutputs = dedupeChatBarSubagents(
+    messages.flatMap((message) =>
+      (message.parts ?? partsFromFlat(message))
+        .filter((part): part is ToolMsgPart => part.type === "tool")
+        .filter((part) => isChatBarSubagent(part))
+        .map((part) => ({
+          ...part,
+          sourceMessageCreatedAt: message.createdAt,
+          sourceMessageIsLatestAssistant: message.id === latestAssistantMessage?.id,
+        })),
+    ),
   );
   const isStaleHistoricalSubagent = (tool: Pick<ToolPart, "sourceMessageCreatedAt" | "sourceMessageIsLatestAssistant">) => {
     const createdAt = Date.parse(tool.sourceMessageCreatedAt || "");
@@ -2907,20 +2920,60 @@ export default function AppShell({ defaultCwd }: { defaultCwd: string }) {
   };
   const isLiveTool = (tool: Pick<ToolPart, "status" | "result" | "sourceMessageCreatedAt" | "sourceMessageIsLatestAssistant">) =>
     isToolRunning(tool.status) && tool.result === undefined && !isStaleHistoricalSubagent(tool);
-  const runningSubagents = subagentOutputs.filter(isLiveTool);
+  const runningSubagents = subagentOutputs.filter((tool) =>
+    isBarSubagentLive(tool, childRunByChatId[tool.subagent?.chatId || ""], isToolRunning),
+  );
   const latestAssistantHasRunningTool = Boolean(
     latestAssistantMessage &&
       (latestAssistantMessage.parts ?? partsFromFlat(latestAssistantMessage))
         .some((part) => part.type === "tool" && isLiveTool(part)),
   );
   const chatBarSubagents = subagentOutputs.filter((tool) => {
-    if (isLiveTool(tool)) return true;
+    if (isBarSubagentLive(tool, childRunByChatId[tool.subagent?.chatId || ""], isToolRunning)) return true;
     const status = String(tool.status || "").toLowerCase();
-    return status === "completed" || status === "complete" || status === "success" || status === "failed" || status === "error";
+    return status === "completed" || status === "complete" || status === "success" || status === "failed" || status === "error" || status === "cancelled";
   });
   const selectedSubagent = activeSubagent
     ? subagentOutputs.find((tool) => tool.id === activeSubagent.id) ?? activeSubagent
     : null;
+  const childChatIds = [...new Set(subagentOutputs.map((tool) => tool.subagent?.chatId).filter((id): id is string => Boolean(id)))].join(",");
+
+  useEffect(() => {
+    const ids = childChatIds ? childChatIds.split(",") : [];
+    if (!ids.length) return;
+    let cancelled = false;
+    let timer: number | undefined;
+    const poll = async () => {
+      if (typeof document !== "undefined" && document.visibilityState === "hidden") {
+        timer = window.setTimeout(() => void poll(), 2000);
+        return;
+      }
+      const updates: Record<string, string> = {};
+      await Promise.all(ids.map(async (id) => {
+        try {
+          const response = await fetch(`/api/chats/${encodeURIComponent(id)}?messageLimit=1`, { cache: "no-store" });
+          if (!response.ok) return;
+          const data = await response.json() as { chat?: { runStatus?: string } };
+          if (data.chat?.runStatus) updates[id] = data.chat.runStatus;
+        } catch {
+          // Child status stays at the last known value.
+        }
+      }));
+      if (cancelled) return;
+      if (Object.keys(updates).length) {
+        setChildRunByChatId((current) => ({ ...current, ...updates }));
+      }
+      const live = ids.some((id) => isChildRunLive(updates[id]));
+      if (live || ids.some((id) => !updates[id])) {
+        timer = window.setTimeout(() => void poll(), 2000);
+      }
+    };
+    void poll();
+    return () => {
+      cancelled = true;
+      if (timer) window.clearTimeout(timer);
+    };
+  }, [childChatIds]);
 
   function handleTouchStart(event: React.TouchEvent<HTMLDivElement>) {
     if (event.touches.length !== 1) {
@@ -4058,7 +4111,9 @@ export default function AppShell({ defaultCwd }: { defaultCwd: string }) {
 
   const openDraft = useCallback(
     (opts?: { skipNav?: boolean; projectId?: string | null }) => {
+      suppressNotesRouteRef.current = true;
       setNotesOpen(false);
+      setFocusedNoteId(null);
       setAutomationsOpen(false);
       setProjectHomeId(null);
       if (opts && "projectId" in opts) {
@@ -4759,17 +4814,22 @@ export default function AppShell({ defaultCwd }: { defaultCwd: string }) {
         activeChatIdRef.current = null;
         setProjectHomeId(null);
     } else if (routeChatId === "notes") {
+      if (suppressNotesRouteRef.current) return;
       setNotesOpen(true);
       setAutomationsOpen(false);
       setWorkspaceOpen(false);
     } else if (routeChatId) {
+      suppressNotesRouteRef.current = false;
       setNotesOpen(false);
       setAutomationsOpen(false);
       if (current !== routeChatId) {
         void loadChat(routeChatId, { skipNav: true });
       }
-    } else if (current && !activeChatIncognito && !notesOpen && !automationsOpen) {
-      openDraft({ skipNav: true });
+    } else {
+      suppressNotesRouteRef.current = false;
+      if (current && !activeChatIncognito && !notesOpen && !automationsOpen) {
+        openDraft({ skipNav: true });
+      }
     }
   }, [activeChatIncognito, authed, automationsOpen, loadChat, notesOpen, openDraft, routeChatId, routeView]);
 
@@ -5285,52 +5345,32 @@ export default function AppShell({ defaultCwd }: { defaultCwd: string }) {
     userScrollInputRef.current = false;
   }, [activeChatId, paneKey]);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     const el = messagesScrollRef.current;
     if (!el) return;
     const pinMessagesToBottom = () => {
       const node = messagesScrollRef.current;
-      if (!node || userDetachedFromBottomRef.current || userScrollInputRef.current) return;
+      if (!node) return;
+      if (!shouldPinOpenedChat({
+        enteringChat: enteringChatRef.current,
+        userDetached: userDetachedFromBottomRef.current,
+        userScrollInput: userScrollInputRef.current,
+        stickToBottom: stickToBottomRef.current,
+      })) return;
       programmaticScrollRef.current = true;
       programmaticUntilRef.current = performance.now() + 160;
-      node.scrollTop = node.scrollHeight;
+      node.scrollTop = pinScrollTop(node.scrollHeight, node.clientHeight);
       lastMessageScrollTopRef.current = node.scrollTop;
-      window.requestAnimationFrame(() => {
-        programmaticScrollRef.current = false;
-      });
     };
     pinMessagesToBottom();
-    let frame2 = 0;
-    const frame1 = window.requestAnimationFrame(() => {
-      pinMessagesToBottom();
-      frame2 = window.requestAnimationFrame(pinMessagesToBottom);
-    });
-    const timer = window.setTimeout(() => {
-      pinMessagesToBottom();
-      enteringChatRef.current = false;
-    }, 500);
-    return () => {
-      window.cancelAnimationFrame(frame1);
-      window.cancelAnimationFrame(frame2);
-      window.clearTimeout(timer);
-    };
-  }, [activeChatId, paneKey, loadingChatId]);
-
-  useEffect(() => {
-    const el = messagesScrollRef.current;
-    if (!el || !stickToBottomRef.current || userDetachedFromBottomRef.current || userScrollInputRef.current) return;
     const frame = window.requestAnimationFrame(() => {
-      if (!stickToBottomRef.current || userDetachedFromBottomRef.current || userScrollInputRef.current) return;
-      programmaticScrollRef.current = true;
-      programmaticUntilRef.current = performance.now() + 160;
-      el.scrollTop = el.scrollHeight;
-      lastMessageScrollTopRef.current = el.scrollTop;
-      window.requestAnimationFrame(() => {
-        programmaticScrollRef.current = false;
-      });
+      pinMessagesToBottom();
+      programmaticScrollRef.current = false;
+      if (loadingChatId) return;
+      enteringChatRef.current = false;
     });
     return () => window.cancelAnimationFrame(frame);
-  }, [messages]);
+  }, [activeChatId, paneKey, loadingChatId, messages]);
 
   useEffect(() => {
     const el = messagesScrollRef.current;
@@ -5357,10 +5397,14 @@ export default function AppShell({ defaultCwd }: { defaultCwd: string }) {
       }, 180);
     };
     const pinIfStuckToBottom = () => {
-      if (userDetachedFromBottomRef.current || userScrollInputRef.current) return;
-      if (!stickToBottomRef.current && !enteringChatRef.current) return;
+      if (!shouldPinOpenedChat({
+        enteringChat: enteringChatRef.current,
+        userDetached: userDetachedFromBottomRef.current,
+        userScrollInput: userScrollInputRef.current,
+        stickToBottom: stickToBottomRef.current,
+      })) return;
       markProgrammaticScroll();
-      el.scrollTop = el.scrollHeight;
+      el.scrollTop = pinScrollTop(el.scrollHeight, el.clientHeight);
       lastMessageScrollTopRef.current = el.scrollTop;
     };
     const detachFromBottom = () => {
@@ -5387,41 +5431,32 @@ export default function AppShell({ defaultCwd }: { defaultCwd: string }) {
         && el.scrollTop < 8
         && previousTop > 80
         && el.scrollHeight > el.clientHeight + 80;
-      if (layoutResetToTop && (stickToBottomRef.current || !userDetachedFromBottomRef.current)) {
+      const action = transcriptScrollAction({
+        enteringChat: enteringChatRef.current,
+        userScrollInput: userScrollInputRef.current,
+        userDetached: userDetachedFromBottomRef.current,
+        scrolledUp,
+        scrolledDown,
+        atBottom,
+        nearBottom,
+        layoutResetToTop,
+        stickToBottom: stickToBottomRef.current,
+      });
+      if (action === "pin") {
         attachToBottom();
         pinIfStuckToBottom();
         return;
       }
-      if (scrolledUp && !layoutResetToTop) {
+      if (action === "detach") {
         detachFromBottom();
         if (el.scrollTop < 80) void loadEarlierMessagesRef.current();
-        return;
-      }
-      if (enteringChatRef.current && !userDetachedFromBottomRef.current && !userScrollInputRef.current) {
-        attachToBottom();
-        pinIfStuckToBottom();
         return;
       }
       if (isProgrammaticScroll()) {
         return;
       }
-      if (userDetachedFromBottomRef.current) {
-        if (userScrollInputRef.current && scrolledDown && atBottom) attachToBottom();
-        else {
-          stickToBottomRef.current = false;
-          setShowScrollDown(true);
-          if (el.scrollTop < 80) void loadEarlierMessagesRef.current();
-        }
-        return;
-      }
-      if (atBottom) {
+      if (action === "attach") {
         attachToBottom();
-        return;
-      }
-      if (!nearBottom) {
-        stickToBottomRef.current = false;
-        setShowScrollDown(true);
-        if (el.scrollTop < 80) void loadEarlierMessagesRef.current();
       }
     };
     const suspendAutoScrollOnWheel = (event: WheelEvent) => {
@@ -6988,32 +7023,34 @@ export default function AppShell({ defaultCwd }: { defaultCwd: string }) {
             asstId = serverMessageId;
           } else if (event === "text" && typeof payload.text === "string") {
             const chunk = payload.text;
-            setMessages((m) =>
-              m.map((x) => {
-                if (x.id !== asstId) return x;
-                const parts = [...(x.parts ?? partsFromFlat(x))];
-                // Collapse thinking on first text delta
-                for (let i = 0; i < parts.length; i++) {
-                  const p = parts[i];
-                  if (p.type === "thinking" && !p.done) {
-                    parts[i] = { ...p, done: true };
+            startTransition(() => {
+              setMessages((m) =>
+                m.map((x) => {
+                  if (x.id !== asstId) return x;
+                  const parts = [...(x.parts ?? partsFromFlat(x))];
+                  // Collapse thinking on first text delta
+                  for (let i = 0; i < parts.length; i++) {
+                    const p = parts[i];
+                    if (p.type === "thinking" && !p.done) {
+                      parts[i] = { ...p, done: true };
+                    }
                   }
-                }
-                const last = parts[parts.length - 1];
-                if (last?.type === "text") {
-                  parts[parts.length - 1] = {
-                    type: "text",
-                    content: last.content + chunk,
+                  const last = parts[parts.length - 1];
+                  if (last?.type === "text") {
+                    parts[parts.length - 1] = {
+                      type: "text",
+                      content: last.content + chunk,
+                    };
+                  } else {
+                    parts.push({ type: "text", content: chunk });
+                  }
+                  return {
+                    ...x,
+                    ...withSyncedFlat(parts, { thinkingDone: true }),
                   };
-                } else {
-                  parts.push({ type: "text", content: chunk });
-                }
-                return {
-                  ...x,
-                  ...withSyncedFlat(parts, { thinkingDone: true }),
-                };
-              }),
-            );
+                }),
+              );
+            });
           } else if (
             event === "suggestions" &&
             Array.isArray(payload.suggestions)
@@ -7639,10 +7676,12 @@ export default function AppShell({ defaultCwd }: { defaultCwd: string }) {
       }),
     0,
   );
-  const contextUsed = latestUsage?.contextUsedTokens
-    ?? latestUsage?.totalProcessedTokens
-    ?? latestUsage?.inputTokens
-    ?? estimatedContextTokens;
+  const contextUsed = lastMeasuredInputTokens({
+    messages: messages.map((message) => ({
+      parts: message.parts,
+      runMetadata: message.runMetadata,
+    })),
+  }) ?? latestUsage?.contextUsedTokens ?? estimatedContextTokens;
   const selectedContextWindow = contextWindowForSelection(selectedModel, modelParams);
   const contextTotal = resolveContextTotal(
     selectedContextWindow ?? latestUsage?.contextWindow,
@@ -9160,8 +9199,8 @@ export default function AppShell({ defaultCwd }: { defaultCwd: string }) {
                       title={title}
                     >
                       <span className="absolute -left-3 top-1/2 w-3 border-t border-border/40" aria-hidden="true" />
-                      {isToolRunning(subagent.status) ? (
-                        <span className="size-1.5 shrink-0 animate-pulse rounded-full bg-foreground/55" />
+                      {isBarSubagentLive(subagent, childRunByChatId[subagent.subagent?.chatId || ""], isToolRunning) ? (
+                        <LoaderCircle className="size-3 shrink-0 animate-spin text-muted-foreground" />
                       ) : (
                         <Check className="size-3 shrink-0 text-muted-foreground/70" />
                       )}
@@ -9665,7 +9704,7 @@ export default function AppShell({ defaultCwd }: { defaultCwd: string }) {
           <>
             <div
               ref={messagesScrollRef}
-              className="messages-composer-mask min-h-0 flex-1 overflow-y-auto"
+              className="messages-composer-mask min-h-0 flex-1 overflow-y-auto [overflow-anchor:none]"
               style={{ ["--composer-mask-size" as string]: `${Math.max(88, composerHeight + 28)}px` }}
               onMouseUp={() => {
                 const selection = window.getSelection();

@@ -1,6 +1,7 @@
 "use client";
 
 import { LinkPreview } from "@/components/link-preview";
+import { parseRichUserText } from "@/lib/user-text-links";
 import { ExternalLink } from "lucide-react";
 import { useEffect, useState } from "react";
 
@@ -13,11 +14,46 @@ type Reference = {
   sessionId?: string;
 };
 
+function dispatchInternalLink(href: string, label: string) {
+  const workspaceMatch = href.match(/^workspace:\/\/(plan|canvas)\/([^/?#]+)(?:[?#].*)?$/i);
+  if (workspaceMatch) {
+    window.dispatchEvent(
+      new CustomEvent("ai-chat:open-workspace", {
+        detail: {
+          type: workspaceMatch[1].toLowerCase(),
+          id: decodeURIComponent(workspaceMatch[2]),
+        },
+      }),
+    );
+    return true;
+  }
+  const noteMatch = href.match(/^note:\/\/([^/?#]+)(?:[?#].*)?$/i);
+  if (noteMatch) {
+    window.dispatchEvent(
+      new CustomEvent("ai-chat:open-note", {
+        detail: { id: decodeURIComponent(noteMatch[1]) },
+      }),
+    );
+    return true;
+  }
+  const automationMatch = href.match(/^automation:\/\/([^/?#]+)(?:[?#].*)?$/i);
+  if (automationMatch) {
+    window.dispatchEvent(
+      new CustomEvent("ai-chat:open-automations", {
+        detail: { id: decodeURIComponent(automationMatch[1]) },
+      }),
+    );
+    return true;
+  }
+  return false;
+}
+
 function RichLink({ href, children }: { href: string; children: string }) {
   const [hovered, setHovered] = useState(false);
   const [modifierHeld, setModifierHeld] = useState(false);
+  const internal = /^(workspace|note|automation):\/\//i.test(href);
   useEffect(() => {
-    if (!hovered) return;
+    if (!hovered || internal) return;
     const update = (event: KeyboardEvent) => {
       if (event.key === "Control" || event.key === "Meta") setModifierHeld(true);
     };
@@ -30,7 +66,7 @@ function RichLink({ href, children }: { href: string; children: string }) {
       window.removeEventListener("keydown", update);
       window.removeEventListener("keyup", clear);
     };
-  }, [hovered]);
+  }, [hovered, internal]);
   return (
     <a
       href={href}
@@ -44,17 +80,17 @@ function RichLink({ href, children }: { href: string; children: string }) {
         setModifierHeld(false);
       }}
       onClick={(event) => {
+        event.preventDefault();
+        if (dispatchInternalLink(href, children)) return;
         if (event.ctrlKey || event.metaKey) {
-          event.preventDefault();
           window.open(href, "_blank", "noopener,noreferrer");
           return;
         }
-        event.preventDefault();
         window.dispatchEvent(new CustomEvent("ai-chat:open-browser", { detail: href }));
       }}
     >
       {children}
-      {hovered && modifierHeld ? (
+      {hovered && modifierHeld && !internal ? (
         <ExternalLink className="ml-1 size-3.5 animate-in fade-in text-muted-foreground" aria-label="Ctrl-click opens in a new tab" />
       ) : null}
     </a>
@@ -72,18 +108,7 @@ export function RichUserText({
     .map((reference) => reference.label.trim())
     .filter(Boolean)
     .sort((a, b) => b.length - a.length);
-  const pattern = labels.length
-    ? new RegExp(`(@(?:${labels.map((label) => label.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|")}))|(https?:\\/\\/[^\\s]+)`, "g")
-    : /(https?:\/\/[^\s]+)/g;
-  const parts: Array<{ text: string; kind: "text" | "mention" | "link" }> = [];
-  let lastIndex = 0;
-  for (const match of content.matchAll(pattern)) {
-    const index = match.index ?? 0;
-    if (index > lastIndex) parts.push({ text: content.slice(lastIndex, index), kind: "text" });
-    parts.push({ text: match[0], kind: match[0].startsWith("@") ? "mention" : "link" });
-    lastIndex = index + match[0].length;
-  }
-  if (lastIndex < content.length) parts.push({ text: content.slice(lastIndex), kind: "text" });
+  const parts = parseRichUserText(content, labels);
 
   return (
     <>
@@ -112,9 +137,13 @@ export function RichUserText({
           );
         }
         if (part.kind === "link") {
-          return (
-            <LinkPreview key={`${part.text}-${index}`} href={part.text}>
-              <RichLink href={part.text}>{part.text}</RichLink>
+          const internal = /^(workspace|note|automation):\/\//i.test(part.href);
+          const link = <RichLink href={part.href}>{part.label}</RichLink>;
+          return internal ? (
+            <span key={`${part.href}-${index}`}>{link}</span>
+          ) : (
+            <LinkPreview key={`${part.href}-${index}`} href={part.href}>
+              {link}
             </LinkPreview>
           );
         }

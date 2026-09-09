@@ -1,4 +1,5 @@
 import type { ToolPart } from "@/lib/store";
+import { isSubagentControlName, isSubagentSpawnName } from "@/lib/subagent-bar";
 
 export type AutomationCardInfo = {
   id: string;
@@ -58,7 +59,8 @@ export function resolveMcpToolName(name: string, ...sources: unknown[]): string 
 export function classifyTool(name: string, input?: unknown): ToolPart["kind"] {
   const value = resolveMcpToolName(name, input).toLowerCase();
   if (value.includes("automation")) return "automation";
-  if (/(subagent|delegate|agent|task)/.test(value)) return "subagent";
+  if (isSubagentControlName(value)) return "mcp";
+  if (isSubagentSpawnName(value)) return "subagent";
   if (/(todo)/.test(value)) return "todo";
   if (/(note)/.test(value)) return "note";
   if (/(memory|remember)/.test(value)) return "memory";

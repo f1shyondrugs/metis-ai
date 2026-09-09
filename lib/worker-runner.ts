@@ -1746,7 +1746,13 @@ export async function runQueuedJob(job: AgentJob) {
               modelId: result.model?.id || job.modelId || chat.modelId,
               connectionId: cursorConnection.id,
               ...(typeof usage?.outputTokens === "number" ? { outputTokens: usage.outputTokens } : {}),
-              ...(typeof usage?.inputTokens === "number" ? { inputTokens: usage.inputTokens, contextUsedTokens: usage.inputTokens } : {}),
+              ...(typeof usage?.inputTokens === "number" ? {
+                inputTokens: usage.inputTokens,
+                contextUsedTokens: (() => {
+                  const after = [...parts].reverse().find((item) => item.type === "compaction")?.afterTokens;
+                  return after ?? usage.inputTokens;
+                })(),
+              } : {}),
               ...(contextWindow ? { contextWindow } : {}),
               ...(cursorModel?.contextWindowSource ? { contextWindowSource: cursorModel.contextWindowSource } : contextWindow ? { contextWindowSource: "provider" as const } : {}),
               ...(cursorModel?.maxOutputTokens ? { maxOutputTokens: cursorModel.maxOutputTokens } : {}),

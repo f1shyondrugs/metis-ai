@@ -2,6 +2,7 @@
 
 import {
   memo,
+  useEffect,
   useLayoutEffect,
   useRef,
   useState,
@@ -15,6 +16,7 @@ function nodeToMarkdown(node: Node, listDepth = 0): string {
   if (node.nodeType !== Node.ELEMENT_NODE) return "";
 
   const element = node as HTMLElement;
+  if (element.hasAttribute("data-md-caret-mark")) return "";
   const mermaid = element.getAttribute("data-mermaid-source")
     || (element.getAttribute("data-editor-control") === "mermaid"
       ? element.querySelector("[data-mermaid-source]")?.getAttribute("data-mermaid-source")
@@ -108,6 +110,7 @@ function restoreSelection(element: HTMLElement, offsets: { start: number; end: n
   let endNode: Node | null = null;
   let endOffset = 0;
   while ((node = walker.nextNode())) {
+    if ((node.parentElement as HTMLElement | null)?.hasAttribute("data-md-caret-mark")) continue;
     const length = node.textContent?.length || 0;
     if (!startNode && offsets.start <= position + length) {
       startNode = node;
@@ -131,6 +134,77 @@ function restoreSelection(element: HTMLElement, offsets: { start: number; end: n
   }
   selection.removeAllRanges();
   selection.addRange(range);
+}
+
+function caretMarkSpec(element: HTMLElement): { before: string; after?: string } | null {
+  const tag = element.tagName.toLowerCase();
+  if (/^h[1-6]$/.test(tag)) return { before: `${"#".repeat(Number(tag[1]))} ` };
+  if (tag === "strong" || tag === "b") return { before: "**", after: "**" };
+  if (tag === "em" || tag === "i") return { before: "*", after: "*" };
+  if (tag === "del" || tag === "s") return { before: "~~", after: "~~" };
+  if (tag === "code" && element.parentElement?.tagName.toLowerCase() !== "pre") {
+    return { before: "`", after: "`" };
+  }
+  if (tag === "blockquote") return { before: "> " };
+  if (tag === "a") {
+    const href = element.getAttribute("href") || "";
+    return { before: "[", after: `](${href})` };
+  }
+  if (tag === "li") {
+    const marker = element.parentElement?.tagName.toLowerCase() === "ol" ? "1. " : "- ";
+    return { before: marker };
+  }
+  return null;
+}
+
+function createCaretMark(kind: "before" | "after", text: string) {
+  const mark = document.createElement("span");
+  mark.setAttribute("data-md-caret-mark", kind);
+  mark.contentEditable = "false";
+  mark.className = "text-muted-foreground select-none";
+  mark.textContent = text;
+  return mark;
+}
+
+function clearCaretMarks(editor: HTMLElement) {
+  editor.querySelectorAll("[data-md-caret-mark]").forEach((node) => node.remove());
+}
+
+function applyCaretMarks(editor: HTMLElement) {
+  const selection = window.getSelection();
+  if (!selection?.rangeCount || document.activeElement !== editor) {
+    clearCaretMarks(editor);
+    return;
+  }
+  const node = selection.anchorNode;
+  if (!node || !editor.contains(node)) {
+    clearCaretMarks(editor);
+    return;
+  }
+  let host = node.nodeType === Node.ELEMENT_NODE ? node as HTMLElement : node.parentElement;
+  while (host && host !== editor) {
+    if (host.hasAttribute("data-md-caret-mark")) {
+      host = host.parentElement;
+      continue;
+    }
+    const spec = caretMarkSpec(host);
+    if (spec) {
+      if (host.getAttribute("data-md-caret-host") === "true" && host.querySelector("[data-md-caret-mark]")) {
+        return;
+      }
+      const offsets = selectionOffsets(editor);
+      clearCaretMarks(editor);
+      editor.querySelectorAll("[data-md-caret-host]").forEach((item) => item.removeAttribute("data-md-caret-host"));
+      host.setAttribute("data-md-caret-host", "true");
+      host.insertBefore(createCaretMark("before", spec.before), host.firstChild);
+      if (spec.after) host.appendChild(createCaretMark("after", spec.after));
+      restoreSelection(editor, offsets);
+      return;
+    }
+    host = host.parentElement;
+  }
+  clearCaretMarks(editor);
+  editor.querySelectorAll("[data-md-caret-host]").forEach((item) => item.removeAttribute("data-md-caret-host"));
 }
 
 type EditableMarkdownProps = {
@@ -174,6 +248,26 @@ export function EditableMarkdown({
     if (!editor || !offsets) return;
     pendingSelectionRef.current = null;
     restoreSelection(editor, offsets);
+    applyCaretMarks(editor);
+  }, [renderVersion]);
+
+  useEffect(() => {
+    const editor = editorRef.current;
+    if (!editor) return;
+    const syncMarks = () => applyCaretMarks(editor);
+    const clearIfBlurred = () => {
+      if (document.activeElement !== editor) clearCaretMarks(editor);
+    };
+    document.addEventListener("selectionchange", syncMarks);
+    editor.addEventListener("keyup", syncMarks);
+    editor.addEventListener("pointerup", syncMarks);
+    editor.addEventListener("blur", clearIfBlurred);
+    return () => {
+      document.removeEventListener("selectionchange", syncMarks);
+      editor.removeEventListener("keyup", syncMarks);
+      editor.removeEventListener("pointerup", syncMarks);
+      editor.removeEventListener("blur", clearIfBlurred);
+    };
   }, [renderVersion]);
 
   return (

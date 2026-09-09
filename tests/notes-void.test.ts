@@ -32,6 +32,13 @@ test("notes void restores pan and wheel interaction after returning to the tab",
   assert.doesNotMatch(notes, /compact && "pointer-events-none"\);/);
 });
 
+test("shared notes pinches with two fingers around the midpoint", () => {
+  assert.match(notes, /handlePinchStart/);
+  assert.match(notes, /pinchDistance\(event\.touches\[0\], event\.touches\[1\]\)/);
+  assert.match(notes, /pinchMidpoint/);
+  assert.match(notes, /insideEditor\(event\.target\)/);
+});
+
 test("loading and empty overlays do not capture pan or wheel on the notes surface", () => {
   assert.match(notes, /status === "loading" \? \(\s*<div className="pointer-events-none absolute inset-0/);
   assert.match(notes, /!visibleNotes\.length \? \(\s*<div className="pointer-events-none absolute inset-0/);

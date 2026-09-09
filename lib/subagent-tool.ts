@@ -1,5 +1,6 @@
 import { parseAgentTranscript } from "@/lib/agent-transcript";
 import type { ToolPart } from "@/lib/store";
+import { isSubagentControlName, isSubagentSpawnName } from "@/lib/subagent-bar";
 
 function record(value: unknown): Record<string, unknown> {
   return value && typeof value === "object" && !Array.isArray(value)
@@ -50,8 +51,8 @@ export function subagentMetadataFromTool(
   resultValue: unknown,
   kind?: string,
 ): ToolPart["subagent"] | undefined {
-  const lower = name.toLowerCase();
-  if (kind !== "subagent" && !/(subagent|delegate|\btask\b|\bagent\b)/.test(lower)) return undefined;
+  if (isSubagentControlName(name)) return undefined;
+  if (kind !== "subagent" && !isSubagentSpawnName(name)) return undefined;
   const input = record(parsed(inputValue));
   const resultMeta = findDelegationMeta(resultValue);
   const transcript = parseAgentTranscript(resultValue);

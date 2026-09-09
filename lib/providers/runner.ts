@@ -275,7 +275,9 @@ export async function runAlternativeProviderJob(
   const onCompaction = (event: CompactionEvent) => {
     markProviderProgress();
     const part: MessagePart = { ...event };
-    parts.push(part);
+    const existing = parts.findIndex((item) => item.type === "compaction");
+    if (existing >= 0) parts[existing] = part;
+    else parts.push(part);
     checkpoint(true);
     emit("compaction", event);
   };
@@ -418,9 +420,10 @@ export async function runAlternativeProviderJob(
     const contextWindowSource = runtimeWindow
       ? "runtime" as const
       : selectedModel?.contextWindowSource || (selectedContextWindow ? "catalog" as const : undefined);
+    const compactionAfter = [...parts].reverse().find((item) => item.type === "compaction")?.afterTokens;
     const contextUsedTokens =
+      compactionAfter ??
       result.usage?.usedTokens ??
-      result.usage?.totalProcessedTokens ??
       inputTokens;
     if (contextUsedTokens || contextWindow) {
       emit("context", {

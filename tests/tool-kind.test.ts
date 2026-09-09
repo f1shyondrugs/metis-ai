@@ -2,6 +2,13 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { classifyTool, parseAutomationCard, resolveMcpToolName, toolDetailFromArgs } from "../lib/tool-kind";
 
+test("subagent status and wait tools are not classified as subagents", () => {
+  assert.equal(classifyTool("subagent_status"), "mcp");
+  assert.equal(classifyTool("subagent_cancel"), "mcp");
+  assert.equal(classifyTool("delegate_subagent"), "subagent");
+  assert.equal(classifyTool("task"), "subagent");
+});
+
 test("web research tools are classified as browser instead of generic read", () => {
   assert.equal(classifyTool("web_search"), "browser");
   assert.equal(classifyTool("WebSearch"), "browser");

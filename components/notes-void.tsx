@@ -9,6 +9,7 @@ import { EditableMarkdown } from "@/components/editable-markdown";
 import { ConfirmDialog } from "@/components/confirm-dialog";
 import { NotePinDialog } from "@/components/note-pin-dialog";
 import { NoteProjectMenu, type NoteProjectOption } from "@/components/note-project-menu";
+import { pinchDistance, pinchMidpoint, viewAfterZoom } from "@/lib/notes-gestures";
 import { cn } from "@/lib/utils";
 
 type View = { x: number; y: number; zoom: number };
@@ -74,7 +75,10 @@ export function NotesVoid({
  const localDraftsRef = useRef(new Map<string, { title?: string; content?: string }>());
  const dirtyNoteIdsRef = useRef(new Set<string>());
  const consumedFocusNoteIdRef = useRef<string | null>(null);
+  const viewRef = useRef(view);
+  const pinchRef = useRef<{ distance: number; zoom: number } | null>(null);
  notesRef.current = notes;
+  viewRef.current = view;
 
  const mergeLoadedNotes = useCallback((serverNotes: SharedNote[]) => {
  const currentById = new Map(notesRef.current.map((note) => [note.id, note]));
@@ -501,19 +505,11 @@ export function NotesVoid({
   const zoomAt = useCallback((event: WheelEvent) => {
     const bounds = surfaceRef.current?.getBoundingClientRect();
     if (!bounds) return;
-
-    const anchorX = event.clientX - bounds.left;
-    const anchorY = event.clientY - bounds.top;
-
+    const factor = event.deltaY > 0 ? 0.9 : 1.1;
     setView((current) => {
-      const nextZoom = Math.max(0.2, Math.min(3, current.zoom * (event.deltaY > 0 ? 0.9 : 1.1)));
-      const contentX = (anchorX - current.x) / current.zoom;
-      const contentY = (anchorY - current.y) / current.zoom;
-      return {
-        zoom: nextZoom,
-        x: anchorX - contentX * nextZoom,
-        y: anchorY - contentY * nextZoom,
-      };
+      const anchorX = event.clientX - bounds.left;
+      const anchorY = event.clientY - bounds.top;
+      return viewAfterZoom(current, anchorX, anchorY, current.zoom * factor);
     });
   }, []);
 
@@ -541,11 +537,55 @@ export function NotesVoid({
       document.body.style.removeProperty("cursor");
       bindWheel();
     };
+    const touchOptions = { capture: true, passive: false } as const;
+    const insideEditor = (target: EventTarget | null) =>
+      target instanceof Element && Boolean(target.closest(".editable-markdown, input, textarea"));
+    const handlePinchStart = (event: TouchEvent) => {
+      if (event.touches.length !== 2) {
+        pinchRef.current = null;
+        return;
+      }
+      if (insideEditor(event.target) && insideEditor(event.touches[0].target) && insideEditor(event.touches[1].target)) {
+        pinchRef.current = null;
+        return;
+      }
+      event.preventDefault();
+      pinchRef.current = {
+        distance: pinchDistance(event.touches[0], event.touches[1]),
+        zoom: viewRef.current.zoom,
+      };
+    };
+    const handlePinchMove = (event: TouchEvent) => {
+      if (event.touches.length !== 2 || !pinchRef.current) return;
+      event.preventDefault();
+      const bounds = surface.getBoundingClientRect();
+      const midpoint = pinchMidpoint(event.touches[0], event.touches[1]);
+      const scale = pinchDistance(event.touches[0], event.touches[1]) / Math.max(1, pinchRef.current.distance);
+      setView((current) =>
+        viewAfterZoom(
+          current,
+          midpoint.clientX - bounds.left,
+          midpoint.clientY - bounds.top,
+          pinchRef.current!.zoom * scale,
+        ),
+      );
+    };
+    const handlePinchEnd = () => {
+      pinchRef.current = null;
+    };
     bindWheel();
+    surface.addEventListener("touchstart", handlePinchStart, touchOptions);
+    surface.addEventListener("touchmove", handlePinchMove, touchOptions);
+    surface.addEventListener("touchend", handlePinchEnd);
+    surface.addEventListener("touchcancel", handlePinchEnd);
     document.addEventListener("visibilitychange", resetSurfaceInteraction);
     window.addEventListener("pageshow", resetSurfaceInteraction);
     return () => {
       surface.removeEventListener("wheel", handleWheel, wheelOptions);
+      surface.removeEventListener("touchstart", handlePinchStart, touchOptions);
+      surface.removeEventListener("touchmove", handlePinchMove, touchOptions);
+      surface.removeEventListener("touchend", handlePinchEnd);
+      surface.removeEventListener("touchcancel", handlePinchEnd);
       document.removeEventListener("visibilitychange", resetSurfaceInteraction);
       window.removeEventListener("pageshow", resetSurfaceInteraction);
     };
