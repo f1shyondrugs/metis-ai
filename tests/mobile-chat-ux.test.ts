@@ -57,7 +57,10 @@ test("legacy Codex diagnostic rows are hidden from existing chat history", () =>
 test("manual upward scrolling disables streaming auto-pin", () => {
   assert.match(shell, /suspendAutoScrollOnWheel = \(event: WheelEvent\)/);
   assert.match(shell, /event\.deltaY >= 0/);
+  assert.match(shell, /userDetachedFromBottomRef\.current = true/);
   assert.match(shell, /stickToBottomRef\.current = false/);
+  assert.match(shell, /scrolledUp && !atBottom/);
+  assert.match(shell, /if \(userDetachedFromBottomRef\.current\) return/);
   assert.match(shell, /el\.addEventListener\("wheel", suspendAutoScrollOnWheel/);
   assert.match(shell, /el\.addEventListener\("touchmove", suspendAutoScrollOnTouch/);
 });

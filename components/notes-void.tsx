@@ -14,7 +14,7 @@ import { cn } from "@/lib/utils";
 type View = { x: number; y: number; zoom: number };
 type ResizeEdge = "n" | "ne" | "e" | "se" | "s" | "sw" | "w" | "nw";
 type DragState =
-  | { id: string; dx: number; dy: number; mode: "move" }
+  | { id: string; dx: number; dy: number; mode: "move"; armed?: boolean; originClientX?: number; originClientY?: number }
   | {
       id: string;
       mode: "resize";
@@ -57,6 +57,7 @@ export function NotesVoid({
   const [drag, setDrag] = useState<DragState>(null);
   const [frontNoteId, setFrontNoteId] = useState<string | null>(null);
   const [editingTitleId, setEditingTitleId] = useState<string | null>(null);
+  const [draftTodoNoteId, setDraftTodoNoteId] = useState<string | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<SharedNote | null>(null);
   const [pinTarget, setPinTarget] = useState<SharedNote | null>(null);
   const [unpinTarget, setUnpinTarget] = useState<{ note: SharedNote; count: number } | null>(null);
@@ -296,6 +297,14 @@ export function NotesVoid({
  saveTimers.current.delete(note.id);
  }, 500);
  saveTimers.current.set(note.id, timer);
+ }, [update]);
+
+ const commitTodos = useCallback((note: SharedNote, todos: NoteTodo[]) => {
+   const current = notesRef.current.find((item) => item.id === note.id) || note;
+   const nextNotes = notesRef.current.map((item) => item.id === note.id ? { ...item, todos } : item);
+   notesRef.current = nextNotes;
+   setNotes(nextNotes);
+   void update(current, { todos });
  }, [update]);
 
  const setNoteProject = useCallback((note: SharedNote, nextProjectId: string | null) => {
@@ -642,10 +651,27 @@ export function NotesVoid({
               },
             });
           } else {
+            if (drag.armed) {
+              const dist = Math.hypot(
+                event.clientX - (drag.originClientX ?? event.clientX),
+                event.clientY - (drag.originClientY ?? event.clientY),
+              );
+              if (dist < 8) return;
+              document.body.style.userSelect = "none";
+              document.body.style.cursor = "move";
+              setDrag({ ...drag, armed: false });
+              if (document.activeElement instanceof HTMLElement) document.activeElement.blur();
+              event.currentTarget.setPointerCapture(event.pointerId);
+            }
             scheduleUpdate(note, { position: { x: point.x - drag.dx, y: point.y - drag.dy } });
           }
         }}
         onPointerUp={(event) => {
+          if (drag?.mode === "move" && drag.armed) {
+            const editor = (event.target instanceof Element ? event.target.closest("[data-note-card]") : null)
+              ?.querySelector<HTMLElement>(".editable-markdown");
+            editor?.focus();
+          }
           setDrag(null);
           document.body.style.removeProperty("user-select");
           document.body.style.removeProperty("cursor");
@@ -680,9 +706,24 @@ export function NotesVoid({
             }}
             onPointerDown={(event) => {
               event.stopPropagation();
-              event.preventDefault();
               setFrontNoteId(note.id);
+              const target = event.target as HTMLElement;
+              const fromContent = Boolean(target.closest(".markdown-body, input, textarea, button, a, [data-editor-control]"));
+              const fromEditorEmpty = Boolean(target.closest(".editable-markdown")) && !fromContent;
               const point = localPoint(event);
+              if (fromEditorEmpty) {
+                setDrag({
+                  id: note.id,
+                  dx: point.x - note.position.x,
+                  dy: point.y - note.position.y,
+                  mode: "move",
+                  armed: true,
+                  originClientX: event.clientX,
+                  originClientY: event.clientY,
+                });
+                return;
+              }
+              event.preventDefault();
               setDrag({ id: note.id, dx: point.x - note.position.x, dy: point.y - note.position.y, mode: "move" });
               document.body.style.userSelect = "none";
               document.body.style.cursor = "move";
@@ -806,6 +847,106 @@ export function NotesVoid({
                 <Trash2 className="size-3" />
               </Button> : null}
             </div>
+            <div className="flex min-h-0 flex-1 flex-col">
+            <div
+              className="shrink-0 space-y-1 px-2 pt-1.5"
+              onPointerDown={(event) => event.stopPropagation()}
+            >
+              <div className="flex items-center gap-1.5">
+                <button
+                  type="button"
+                  aria-label="Add todo"
+                  title="Add todo"
+                  className="flex size-5 shrink-0 items-center justify-center rounded-sm border border-black/25 bg-white/45 text-black/70 hover:bg-white/70 hover:text-black"
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    setFrontNoteId(note.id);
+                    setDraftTodoNoteId(note.id);
+                  }}
+                >
+                  <Plus className="size-3" />
+                </button>
+                {draftTodoNoteId === note.id ? (
+                  <input
+                    autoFocus
+                    className="h-5 min-w-0 flex-1 bg-transparent text-[11px] text-black outline-none placeholder:text-black/40"
+                    placeholder="Add a todo"
+                    aria-label="New todo"
+                    onPointerDown={(event) => event.stopPropagation()}
+                    onBlur={(event) => {
+                      const content = event.currentTarget.value.trim();
+                      if (content) {
+                        commitTodos(note, [
+                          ...(note.todos || []),
+                          { id: `todo-${Date.now()}`, content, status: "pending" },
+                        ]);
+                      }
+                      setDraftTodoNoteId((current) => current === note.id ? null : current);
+                    }}
+                    onKeyDown={(event) => {
+                      if (event.key === "Escape") {
+                        event.preventDefault();
+                        setDraftTodoNoteId(null);
+                        event.currentTarget.blur();
+                        return;
+                      }
+                      if (event.key !== "Enter") return;
+                      const content = event.currentTarget.value.trim();
+                      event.preventDefault();
+                      if (content) {
+                        commitTodos(note, [
+                          ...(note.todos || []),
+                          { id: `todo-${Date.now()}`, content, status: "pending" },
+                        ]);
+                        event.currentTarget.value = "";
+                      } else {
+                        setDraftTodoNoteId(null);
+                        event.currentTarget.blur();
+                      }
+                    }}
+                  />
+                ) : null}
+              </div>
+              {(note.todos || []).map((todo, index) => {
+                const done = todo.status === "completed";
+                return (
+                  <div
+                    key={todo.id || `${todo.content}-${index}`}
+                    className="group relative flex min-w-0 items-center gap-1.5 pr-4 text-[11px] text-black/80"
+                  >
+                    <label className="flex min-w-0 flex-1 items-center gap-1.5">
+                      <input
+                        type="checkbox"
+                        checked={done}
+                        onChange={() => {
+                          const next = (note.todos || []).map((item, itemIndex) =>
+                            itemIndex === index
+                              ? { ...item, status: (done ? "pending" : "completed") as NoteTodo["status"] }
+                              : item,
+                          );
+                          commitTodos(note, next);
+                        }}
+                      />
+                      <span className={done ? "truncate line-through opacity-60" : "truncate"}>{todo.content}</span>
+                    </label>
+                    <button
+                      type="button"
+                      aria-label={`Delete todo: ${todo.content}`}
+                      title="Delete todo"
+                      className="absolute right-0 top-1/2 -translate-y-1/2 rounded p-0.5 text-black/35 opacity-0 transition-opacity duration-150 pointer-events-none group-hover:pointer-events-auto group-hover:opacity-100 hover:text-black/60 focus-visible:pointer-events-auto focus-visible:opacity-100"
+                      onClick={(event) => {
+                        event.preventDefault();
+                        event.stopPropagation();
+                        const next = (note.todos || []).filter((_, itemIndex) => itemIndex !== index);
+                        commitTodos(note, next);
+                      }}
+                    >
+                      <X className="size-3" />
+                    </button>
+                  </div>
+                );
+              })}
+            </div>
             <EditableMarkdown
               value={note.content}
               onChange={(value) => scheduleUpdate(note, { content: value })}
@@ -814,74 +955,14 @@ export function NotesVoid({
               placeholder={note.kind === "project" ? "Project notes…" : "Write a note…"}
               aria-label="Note content"
               onPointerDown={(event) => {
-                event.stopPropagation();
                 setFrontNoteId(note.id);
+                const target = event.target as HTMLElement;
+                if (target.closest(".markdown-body, input, textarea, button, a, [data-editor-control]")) {
+                  event.stopPropagation();
+                }
               }}
             />
-            {note.kind === "project" ? (
-              <div
-                className="shrink-0 space-y-1 border-t border-black/10 px-2 py-1.5"
-                onPointerDown={(event) => event.stopPropagation()}
-              >
-                {(note.todos || []).map((todo, index) => {
-                  const done = todo.status === "completed";
-                  return (
-                    <div
-                      key={todo.id || `${todo.content}-${index}`}
-                      className="group relative flex min-w-0 items-center gap-1.5 pr-4 text-[11px] text-black/80"
-                    >
-                      <label className="flex min-w-0 flex-1 items-center gap-1.5">
-                        <input
-                          type="checkbox"
-                          checked={done}
-                          onChange={() => {
-                            const next = (note.todos || []).map((item, itemIndex) =>
-                              itemIndex === index
-                                ? { ...item, status: (done ? "pending" : "completed") as NoteTodo["status"] }
-                                : item,
-                            );
-                            void update(note, { todos: next });
-                          }}
-                        />
-                        <span className={done ? "truncate line-through opacity-60" : "truncate"}>{todo.content}</span>
-                      </label>
-                      <button
-                        type="button"
-                        aria-label={`Delete todo: ${todo.content}`}
-                        title="Delete todo"
-                        className="absolute right-0 top-1/2 -translate-y-1/2 rounded p-0.5 text-black/35 opacity-0 transition-opacity duration-150 pointer-events-none group-hover:pointer-events-auto group-hover:opacity-100 hover:text-black/60 focus-visible:pointer-events-auto focus-visible:opacity-100"
-                        onClick={(event) => {
-                          event.preventDefault();
-                          event.stopPropagation();
-                          const next = (note.todos || []).filter((_, itemIndex) => itemIndex !== index);
-                          void update(note, { todos: next });
-                        }}
-                      >
-                        <X className="size-3" />
-                      </button>
-                    </div>
-                  );
-                })}
-                {!compact ? (
-                  <input
-                    className="h-6 w-full bg-transparent text-[11px] text-black outline-none placeholder:text-black/40"
-                    placeholder="Add a todo and press Enter"
-                    onKeyDown={(event) => {
-                      if (event.key !== "Enter") return;
-                      const content = event.currentTarget.value.trim();
-                      if (!content) return;
-                      event.preventDefault();
-                      const next = [
-                        ...(note.todos || []),
-                        { id: `todo-${Date.now()}`, content, status: "pending" as const },
-                      ];
-                      event.currentTarget.value = "";
-                      void update(note, { todos: next });
-                    }}
-                  />
-                ) : null}
-              </div>
-            ) : null}
+            </div>
             {([
               ["n", "inset-x-1/2 top-0 h-2 w-1/2 -translate-x-1/2 cursor-ns-resize"],
               ["ne", "right-0 top-0 size-3 cursor-nesw-resize"],

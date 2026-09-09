@@ -225,7 +225,14 @@ export function PinnedNotesPanel({ chatId }: { chatId: string | null }) {
               <X className="size-3" />
             </Button>
           </div>
-          <div className="editable-markdown min-h-0 overflow-y-auto p-2 text-xs leading-5 text-black [&_.markdown-body]:text-black [&_.markdown-body_*]:text-black [&_.markdown-body_p]:my-1 [&_.markdown-body_ul]:my-1 [&_.markdown-body_ol]:my-1">
+          <div
+            className="editable-markdown min-h-0 flex-1 cursor-text overflow-y-auto p-2 text-xs leading-5 text-black [&_.markdown-body]:text-black [&_.markdown-body_*]:text-black [&_.markdown-body_p]:my-1 [&_.markdown-body_ul]:my-1 [&_.markdown-body_ol]:my-1"
+            onPointerDown={(event) => {
+              const target = event.target as HTMLElement;
+              if (target.closest(".markdown-body, input, textarea, button, a, [data-editor-control]")) return;
+              startDrag(event, note);
+            }}
+          >
             <EditableMarkdown
               value={note.content}
               onChange={(content) => scheduleUpdate(note, { content })}

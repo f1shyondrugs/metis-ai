@@ -2240,6 +2240,9 @@ export default function AppShell({ defaultCwd }: { defaultCwd: string }) {
   const bottomRef = useRef<HTMLDivElement>(null);
   const messagesScrollRef = useRef<HTMLDivElement>(null);
   const stickToBottomRef = useRef(true);
+  const programmaticScrollRef = useRef(false);
+  const userDetachedFromBottomRef = useRef(false);
+  const lastMessageScrollTopRef = useRef(0);
   const enteringChatRef = useRef(false);
   const runtimeRef = useRef<Map<string, ChatRuntime>>(new Map());
   const queueDrainRef = useRef(false);
@@ -4198,6 +4201,7 @@ export default function AppShell({ defaultCwd }: { defaultCwd: string }) {
       if (!alreadyActive) persistActiveSnapshot();
       activeChatIdRef.current = id;
       stickToBottomRef.current = true;
+      userDetachedFromBottomRef.current = false;
       enteringChatRef.current = true;
       if (!opts?.skipNav) navigateChat(id);
       chatLoadAbortRef.current?.abort();
@@ -4502,9 +4506,7 @@ export default function AppShell({ defaultCwd }: { defaultCwd: string }) {
         const scrollElement = messagesScrollRef.current;
         const previousHeight = scrollElement?.scrollHeight ?? 0;
         const previousTop = scrollElement?.scrollTop ?? 0;
-        const wasAtBottom = enteringChatRef.current || stickToBottomRef.current || (scrollElement
-          ? scrollElement.scrollHeight - scrollElement.scrollTop - scrollElement.clientHeight < 80
-          : false);
+        const wasAtBottom = enteringChatRef.current || stickToBottomRef.current;
         try {
           const res = await fetchReadWithRetry(
             `/api/chats/${activeChatId}?messageLimit=${CHAT_MESSAGE_LOAD_LIMIT}&messageOffset=${nextOffset}`,
@@ -5255,6 +5257,7 @@ export default function AppShell({ defaultCwd }: { defaultCwd: string }) {
     notifiedPlanRef.current.clear();
     enteringChatRef.current = true;
     stickToBottomRef.current = true;
+    userDetachedFromBottomRef.current = false;
   }, [activeChatId, paneKey]);
 
   useEffect(() => {
@@ -5262,10 +5265,16 @@ export default function AppShell({ defaultCwd }: { defaultCwd: string }) {
     if (!el) return;
     enteringChatRef.current = true;
     stickToBottomRef.current = true;
+    userDetachedFromBottomRef.current = false;
     const pinMessagesToBottom = () => {
       const node = messagesScrollRef.current;
       if (!node) return;
+      programmaticScrollRef.current = true;
       node.scrollTop = node.scrollHeight;
+      lastMessageScrollTopRef.current = node.scrollTop;
+      window.requestAnimationFrame(() => {
+        programmaticScrollRef.current = false;
+      });
     };
     pinMessagesToBottom();
     let frame2 = 0;
@@ -5289,9 +5298,15 @@ export default function AppShell({ defaultCwd }: { defaultCwd: string }) {
 
   useEffect(() => {
     const el = messagesScrollRef.current;
-    if (!el || !stickToBottomRef.current) return;
+    if (!el || !stickToBottomRef.current || userDetachedFromBottomRef.current) return;
     const frame = window.requestAnimationFrame(() => {
-      if (stickToBottomRef.current) el.scrollTop = el.scrollHeight;
+      if (!stickToBottomRef.current || userDetachedFromBottomRef.current) return;
+      programmaticScrollRef.current = true;
+      el.scrollTop = el.scrollHeight;
+      lastMessageScrollTopRef.current = el.scrollTop;
+      window.requestAnimationFrame(() => {
+        programmaticScrollRef.current = false;
+      });
     });
     return () => window.cancelAnimationFrame(frame);
   }, [messages]);
@@ -5299,36 +5314,70 @@ export default function AppShell({ defaultCwd }: { defaultCwd: string }) {
   useEffect(() => {
     const el = messagesScrollRef.current;
     if (!el) return;
+    lastMessageScrollTopRef.current = el.scrollTop;
+    const AT_BOTTOM_PX = 16;
+    const SHOW_JUMP_PX = 80;
+    const distanceFromBottom = () => el.scrollHeight - el.scrollTop - el.clientHeight;
+    const detachFromBottom = () => {
+      if (enteringChatRef.current) return;
+      userDetachedFromBottomRef.current = true;
+      stickToBottomRef.current = false;
+      setShowScrollDown(true);
+    };
+    const attachToBottom = () => {
+      userDetachedFromBottomRef.current = false;
+      stickToBottomRef.current = true;
+      setShowScrollDown(false);
+    };
     const updateScrollState = () => {
-      const distanceFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
-      const nearBottom = distanceFromBottom < 80;
+      const distance = distanceFromBottom();
+      const atBottom = distance <= AT_BOTTOM_PX;
+      const nearBottom = distance < SHOW_JUMP_PX;
       if (enteringChatRef.current) {
-        stickToBottomRef.current = true;
-        setShowScrollDown(false);
+        attachToBottom();
+        lastMessageScrollTopRef.current = el.scrollTop;
         return;
       }
-      stickToBottomRef.current = nearBottom;
-      setShowScrollDown(!nearBottom);
-      if (el.scrollTop < 80 && !nearBottom) void loadEarlierMessages();
+      if (programmaticScrollRef.current) {
+        lastMessageScrollTopRef.current = el.scrollTop;
+        return;
+      }
+      const scrolledUp = el.scrollTop + 1 < lastMessageScrollTopRef.current;
+      lastMessageScrollTopRef.current = el.scrollTop;
+      if (scrolledUp && !atBottom) {
+        detachFromBottom();
+        if (el.scrollTop < 80) void loadEarlierMessages();
+        return;
+      }
+      if (atBottom) {
+        attachToBottom();
+        return;
+      }
+      if (userDetachedFromBottomRef.current || !nearBottom) {
+        stickToBottomRef.current = false;
+        setShowScrollDown(true);
+        if (el.scrollTop < 80 && !nearBottom) void loadEarlierMessages();
+      }
     };
     el.addEventListener("scroll", updateScrollState, { passive: true });
     const inner = el.firstElementChild;
     const pinIfStuckToBottom = () => {
+      if (userDetachedFromBottomRef.current) return;
       if (!stickToBottomRef.current && !enteringChatRef.current) return;
+      programmaticScrollRef.current = true;
       el.scrollTop = el.scrollHeight;
+      lastMessageScrollTopRef.current = el.scrollTop;
+      window.requestAnimationFrame(() => {
+        programmaticScrollRef.current = false;
+      });
     };
     const suspendAutoScrollOnWheel = (event: WheelEvent) => {
       if (enteringChatRef.current || event.deltaY >= 0) return;
-      stickToBottomRef.current = false;
-      setShowScrollDown(true);
+      detachFromBottom();
     };
     const suspendAutoScrollOnTouch = () => {
       if (enteringChatRef.current) return;
-      const distanceFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
-      if (distanceFromBottom >= 80) {
-        stickToBottomRef.current = false;
-        setShowScrollDown(true);
-      }
+      if (distanceFromBottom() > AT_BOTTOM_PX) detachFromBottom();
     };
     el.addEventListener("wheel", suspendAutoScrollOnWheel, { passive: true });
     el.addEventListener("touchmove", suspendAutoScrollOnTouch, { passive: true });
@@ -5413,11 +5462,18 @@ export default function AppShell({ defaultCwd }: { defaultCwd: string }) {
 
   function scrollMessagesToBottom() {
     stickToBottomRef.current = true;
+    userDetachedFromBottomRef.current = false;
     setShowScrollDown(false);
-    messagesScrollRef.current?.scrollTo({
-      top: messagesScrollRef.current.scrollHeight,
+    const el = messagesScrollRef.current;
+    if (!el) return;
+    programmaticScrollRef.current = true;
+    el.scrollTo({
+      top: el.scrollHeight,
       behavior: "smooth",
     });
+    window.setTimeout(() => {
+      programmaticScrollRef.current = false;
+    }, 400);
   }
 
   useEffect(() => {
