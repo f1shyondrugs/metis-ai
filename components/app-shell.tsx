@@ -2869,15 +2869,16 @@ export default function AppShell({ defaultCwd }: { defaultCwd: string }) {
       .filter((part): part is ToolMsgPart => part.type === "tool")
       .filter((part) => part.kind === "subagent"),
   );
-  const runningSubagents = subagentOutputs.filter((tool) => isToolRunning(tool.status));
+  const isLiveTool = (tool: Pick<ToolPart, "status" | "result">) => isToolRunning(tool.status) && tool.result === undefined;
+  const runningSubagents = subagentOutputs.filter(isLiveTool);
   const latestAssistantMessage = [...messages].reverse().find((message) => message.role === "assistant");
   const latestAssistantHasRunningTool = Boolean(
     latestAssistantMessage &&
       (latestAssistantMessage.parts ?? partsFromFlat(latestAssistantMessage))
-        .some((part) => part.type === "tool" && isToolRunning(part.status)),
+        .some((part) => part.type === "tool" && isLiveTool(part)),
   );
   const chatBarSubagents = subagentOutputs.filter((tool) => {
-    if (isToolRunning(tool.status)) return true;
+    if (isLiveTool(tool)) return true;
     const status = String(tool.status || "").toLowerCase();
     return status === "completed" || status === "complete" || status === "success" || status === "failed" || status === "error";
   });

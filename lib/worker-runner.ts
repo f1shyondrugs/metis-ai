@@ -1072,20 +1072,21 @@ export async function runQueuedJob(job: AgentJob) {
     const resetInactivityTimer = () => {
       if (inactivityTimer) clearTimeout(inactivityTimer);
       inactivityTimer = setTimeout(() => {
+        inactivityTimer = undefined;
         const active = tools.filter((tool) => isActiveToolStatus(tool.status));
+        const message = "No new output for 5 minutes; the run was aborted.";
         const payload = {
           reason: active.length ? "active_tool" : "stream_gap",
           activeTools: active.map((tool) => ({ id: tool.id, name: tool.name, status: tool.status })),
           textChars: text.length,
+          action: "abort",
         };
         appendAgentTrace(job, "inactivity", payload);
-        emit("status", {
-          status: "running",
-          message: active.length
-            ? `Waiting on ${active.map((tool) => tool.name).join(", ")}.`
-            : "No new tokens for 5 minutes; continuing instead of aborting.",
-        });
-        resetInactivityTimer();
+        cancellationRequested = true;
+        updateJob(job.id, { status: "cancelled", error: message });
+        updateChat(job.chatId, { runStatus: "cancelled", runUpdatedAt: new Date().toISOString() }, job.userId);
+        emit("status", { status: "cancelled", message });
+        void activeRun?.cancel().catch(() => undefined);
       }, AGENT_INACTIVITY_TIMEOUT_MS);
     };
     const markSendProgress = () => {

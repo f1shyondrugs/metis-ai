@@ -37,7 +37,7 @@ test("mobile composer footer always shows context and provider usage beside comp
 });
 
 test("running tool activity replaces the redundant generic agent-running row", () => {
-  assert.match(shell, /const latestAssistantHasRunningTool = Boolean\([\s\S]*?isToolRunning\(part\.status\)/);
+  assert.match(shell, /const latestAssistantHasRunningTool = Boolean\([\s\S]*?isLiveTool\(part\)/);
   const guardedStatuses = shell.match(/activeChatIsRunning && !latestAssistantHasRunningTool/g) || [];
   assert.equal(guardedStatuses.length >= 2, true);
 });
@@ -60,6 +60,12 @@ test("manual upward scrolling disables streaming auto-pin", () => {
   assert.match(shell, /stickToBottomRef\.current = false/);
   assert.match(shell, /el\.addEventListener\("wheel", suspendAutoScrollOnWheel/);
   assert.match(shell, /el\.addEventListener\("touchmove", suspendAutoScrollOnTouch/);
+});
+
+test("completed subagent results are not shown as still running", () => {
+  assert.match(shell, /const isLiveTool = \(tool: Pick<ToolPart, "status" \| "result">\) => isToolRunning\(tool\.status\) && tool\.result === undefined/);
+  assert.match(shell, /const runningSubagents = subagentOutputs\.filter\(isLiveTool\)/);
+  assert.match(shell, /some\(\(part\) => part\.type === "tool" && isLiveTool\(part\)\)/);
 });
 
 test("opening a chat pins the transcript to the bottom and does not page history while pinning", () => {

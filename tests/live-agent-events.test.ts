@@ -36,6 +36,15 @@ test("tool responses finalize adapters that incorrectly keep a running status", 
   assert.match(chip, /isToolRunning\(status\) && result === undefined/);
 });
 
+test("silent agent runs abort after the inactivity timeout instead of looping forever", () => {
+  const source = readFileSync(path.join(root, "lib", "worker-runner.ts"), "utf8");
+  assert.match(source, /No new output for 5 minutes; the run was aborted/);
+  assert.match(source, /action: "abort"/);
+  assert.match(source, /updateJob\(job\.id, \{ status: "cancelled", error: message \}\)/);
+  assert.match(source, /void activeRun\?\.cancel\(\)\.catch/);
+  assert.doesNotMatch(source, /continuing instead of aborting/);
+});
+
 test("xAI provider path exposes live web search tools", () => {
   const source = readFileSync(path.join(root, "lib", "providers", "adapters", "provider-support.ts"), "utf8");
   assert.match(source, /tools\.webSearch|tools\.web_search/);
