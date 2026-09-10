@@ -39,6 +39,8 @@ test("chart board renders Recharts and supports fullscreen and resize", () => {
   assert.match(board, /event\.key === "Escape"/);
   assert.match(board, /charts\.map\(/);
   assert.match(board, /data-chart-renderer/);
+  assert.match(board, /top: 18, right: 24, bottom: 4, left: 0/);
+  assert.match(board, /pb-2 pl-1 pr-4 pt-4/);
   assert.match(board, /radial-gradient\(circle at 1px 1px/);
   assert.match(board, /from-background to-transparent/);
   assert.match(board, /h-0\.5 w-8 rounded-full bg-border/);

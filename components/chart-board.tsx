@@ -93,6 +93,7 @@ function ChartHover({
 
 const axisColor = "var(--muted-foreground)";
 const axisTick = { fill: axisColor, fontSize: 11 };
+const plotMargin = { top: 18, right: 24, bottom: 4, left: 0 };
 
 function ChartPlot({ spec, hidden }: { spec: ChartSpec; hidden: Set<string> }) {
   const allSeries = normalizedSeries(spec);
@@ -132,7 +133,7 @@ function ChartPlot({ spec, hidden }: { spec: ChartSpec; hidden: Set<string> }) {
   if (spec.type === "scatter") {
     return (
       <ResponsiveContainer width="100%" height="100%">
-        <ScatterChart margin={{ top: 8, right: 12, bottom: 4, left: 0 }}>
+        <ScatterChart margin={plotMargin}>
           <XAxis dataKey="x" type="number" stroke={axisColor} tick={axisTick} tickLine={false} axisLine={{ stroke: axisColor }} />
           <YAxis dataKey="y" type="number" stroke={axisColor} tick={axisTick} tickLine={false} axisLine={{ stroke: axisColor }} />
           <Tooltip cursor={false} content={<ChartHover />} />
@@ -153,7 +154,7 @@ function ChartPlot({ spec, hidden }: { spec: ChartSpec; hidden: Set<string> }) {
   const Chart = spec.type === "bar" ? BarChart : spec.type === "area" ? AreaChart : LineChart;
   return (
     <ResponsiveContainer width="100%" height="100%">
-      <Chart data={data} margin={{ top: 8, right: 12, bottom: 4, left: 0 }}>
+      <Chart data={data} margin={plotMargin}>
         <XAxis dataKey="label" stroke={axisColor} tick={axisTick} tickLine={false} axisLine={{ stroke: axisColor }} />
         <YAxis stroke={axisColor} tick={axisTick} tickLine={false} axisLine={{ stroke: axisColor }} />
         <Tooltip content={<ChartHover />} />
@@ -297,7 +298,7 @@ function InteractiveChart({
           backgroundSize: "24px 24px",
         }}
       >
-        <div className="absolute inset-0 px-1 pb-2 pt-1">
+        <div className="absolute inset-0 pb-2 pl-1 pr-4 pt-4">
           <ChartPlot spec={spec} hidden={hidden} />
         </div>
         <div className="pointer-events-none absolute inset-x-0 top-0 z-[5] h-12 bg-gradient-to-b from-background to-transparent" />
