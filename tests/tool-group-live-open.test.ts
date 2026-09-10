@@ -15,3 +15,12 @@ test("auto-expanded tool activity can still be manually collapsed", () => {
   assert.match(toolGroup, /open === null \? !groupOpen : !open/);
   assert.match(toolGroup, /locked=\{false\}/);
 });
+
+test("chat canvas cards hydrate live markdown instead of empty edit payloads", () => {
+  const card = readFileSync(new URL("../components/canvas-workspace-card.tsx", import.meta.url), "utf8");
+  assert.match(toolGroup, /hydrateCanvasPreview\(canvasFromToolPayload/);
+  assert.match(toolGroup, /workspaces=\{workspaces\}/);
+  assert.match(card, /max-h-\[28rem\]/);
+  assert.match(shell, /workspaceIdFromLink\(preview\?\.workspaceLink/);
+  assert.match(shell, /workspaces=\{workspaces\}/);
+});

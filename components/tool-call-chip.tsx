@@ -29,8 +29,10 @@ import { planLooksParallelizable } from "@/lib/modes";
 import { CanvasWorkspaceCard } from "@/components/canvas-workspace-card";
 
 import {
+  canvasFromToolPayload,
   compactFileDiff,
   enrichToolDisplay,
+  hydrateCanvasPreview,
   isToolRunning,
   planFromToolPayload,
   todosFromToolPayload,
@@ -81,6 +83,7 @@ type ToolCallProps = ToolCallData & {
   locked?: boolean;
   nested?: boolean;
   hostnames?: Record<string, string>;
+  workspaces?: Array<{ id: string; type?: string; name?: string; content?: string }>;
 };
 
 const ACTION_ICONS: Record<ToolActionIcon, typeof BookOpen> = {
@@ -193,34 +196,6 @@ function displayedDiffStats(diff?: ToolCallData["diff"], input?: string) {
     additions: Math.max(0, afterEnd - start),
     deletions: Math.max(0, beforeEnd - start),
   };
-}
-
-function canvasInfo(input?: string, result?: string, detail?: string) {
-  const sources = [input, result, detail].filter(Boolean) as string[];
-  for (const source of sources) {
-    try {
-      const parsed = JSON.parse(source) as Record<string, unknown>;
-      const value = parsed.value && typeof parsed.value === "object"
-        ? parsed.value as Record<string, unknown>
-        : {};
-      const content = [parsed.canvas, parsed.content, value.canvas, value.content]
-        .find((candidate): candidate is string => typeof candidate === "string");
-      if (content !== undefined) {
-        const title = [parsed.title, parsed.name, value.title, value.name]
-          .find((candidate): candidate is string => typeof candidate === "string" && Boolean(candidate.trim()));
-        return {
-          title: title?.trim() || "Canvas",
-          content: content.trim(),
-          workspaceLink: typeof parsed.workspaceLink === "string" ? parsed.workspaceLink : undefined,
-        };
-      }
-    } catch {
-      if (source.trim() && !source.trim().startsWith("{")) {
-        return { title: "Canvas", content: source.trim() };
-      }
-    }
-  }
-  return null;
 }
 
 function noteInfo(input?: string, result?: string, detail?: string) {
@@ -370,6 +345,7 @@ export const ToolCallChip = memo(function ToolCallChip({
   todos,
   hostnames,
   source,
+  workspaces,
 }: ToolCallProps) {
   const [userOpen, setUserOpen] = useState<boolean | null>(null);
   // A few adapters deliver the result while leaving the lifecycle status at
@@ -456,7 +432,7 @@ export const ToolCallChip = memo(function ToolCallChip({
     );
   }
   const canvas = resolvedKind === "canvas" && !running
-    ? canvasInfo(input, result, detail)
+    ? hydrateCanvasPreview(canvasFromToolPayload(input, result, detail), workspaces)
     : null;
   if (canvas) {
     return (
@@ -716,6 +692,7 @@ export const ToolCallGroup = memo(function ToolCallGroup({
   autoExpand = false,
   live = false,
   hostnames,
+  workspaces,
 }: {
   tools: ToolCallData[];
   thinking?: ActivityThinking[];
@@ -730,6 +707,7 @@ export const ToolCallGroup = memo(function ToolCallGroup({
   autoExpand?: boolean;
   live?: boolean;
   hostnames?: Record<string, string>;
+  workspaces?: Array<{ id: string; type?: string; name?: string; content?: string }>;
 }) {
   const [userOpen, setUserOpen] = useState<boolean | null>(null);
   const isTodoTool = (tool: ToolCallData) =>
@@ -767,6 +745,7 @@ export const ToolCallGroup = memo(function ToolCallGroup({
     <ToolCallChip
       {...tool}
       hostnames={hostnames}
+      workspaces={workspaces}
       nested={nested}
       onOpenDiff={() => onOpenDiff?.(tool)}
       onOpenSubagent={() => onOpenSubagent?.(tool)}

@@ -17,6 +17,11 @@ function nodeToMarkdown(node: Node, listDepth = 0): string {
 
   const element = node as HTMLElement;
   if (element.hasAttribute("data-md-caret-mark")) return "";
+  const graph = element.getAttribute("data-graph-source")
+    || (element.getAttribute("data-editor-control") === "graph"
+      ? element.querySelector("[data-graph-source]")?.getAttribute("data-graph-source")
+      : "");
+  if (graph) return `\`\`\`graph\n${graph.replace(/\n$/, "")}\n\`\`\`\n\n`;
   const mermaid = element.getAttribute("data-mermaid-source")
     || (element.getAttribute("data-editor-control") === "mermaid"
       ? element.querySelector("[data-mermaid-source]")?.getAttribute("data-mermaid-source")
@@ -37,9 +42,18 @@ function nodeToMarkdown(node: Node, listDepth = 0): string {
     return `\`${children}\``;
   }
   if (tag === "pre") {
+    const graph = element.getAttribute("data-graph-source")
+      || element.querySelector("[data-graph-source]")?.getAttribute("data-graph-source")
+      || "";
+    if (graph) return `\`\`\`graph\n${graph.replace(/\n$/, "")}\n\`\`\`\n\n`;
+    const mermaid = element.getAttribute("data-mermaid-source")
+      || element.querySelector("[data-mermaid-source]")?.getAttribute("data-mermaid-source")
+      || "";
+    if (mermaid) return `\`\`\`mermaid\n${mermaid.replace(/\n$/, "")}\n\`\`\`\n\n`;
     const codeElement = element.querySelector("code");
     const code = codeElement?.textContent || "";
     const language = codeElement?.className.match(/language-([\w-]+)/)?.[1] || "";
+    if (!code.trim()) return "";
     return `\`\`\`${language}\n${code.replace(/\n$/, "")}\n\`\`\`\n\n`;
   }
   if (tag === "button") return "";
@@ -287,6 +301,8 @@ export function EditableMarkdown({
         className,
       )}
       onInput={(event) => {
+        const origin = event.target instanceof Element ? event.target : (event.target as Node).parentElement;
+        if (origin?.closest("[data-editor-control]")) return;
         const nextValue = htmlToMarkdown(event.currentTarget);
         localValueRef.current = nextValue;
         onChange(nextValue);

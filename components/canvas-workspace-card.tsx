@@ -16,8 +16,9 @@ export function CanvasWorkspaceCard({ title, content, workspaceLink, onOpen }: C
   const [copied, setCopied] = useState(false);
   const stats = useMemo(() => {
     const diagrams = (content.match(/```(?:mermaid|graphviz|dot)\b/gi) || []).length;
+    const graphs = (content.match(/```(?:graph|jsxgraph|geogebra|plot)\b/gi) || []).length;
     const headings = (content.match(/^#{1,3}\s+\S/gm) || []).length;
-    return { diagrams, headings };
+    return { diagrams, graphs, headings };
   }, [content]);
 
   async function copyRawContent() {
@@ -41,6 +42,7 @@ export function CanvasWorkspaceCard({ title, content, workspaceLink, onOpen }: C
           <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
             <span className="text-[10px] font-semibold uppercase tracking-[0.13em] text-violet-300/85">Canvas</span>
             {stats.diagrams ? <span className="text-[10px] text-muted-foreground/65">{stats.diagrams} diagram{stats.diagrams === 1 ? "" : "s"}</span> : null}
+            {stats.graphs ? <span className="text-[10px] text-muted-foreground/65">{stats.graphs} graph{stats.graphs === 1 ? "" : "s"}</span> : null}
             {!stats.diagrams && stats.headings ? <span className="text-[10px] text-muted-foreground/65">{stats.headings} sections</span> : null}
           </div>
           <h3 className="mt-0.5 truncate text-sm font-semibold tracking-tight text-foreground" title={title}>{title}</h3>
@@ -53,7 +55,7 @@ export function CanvasWorkspaceCard({ title, content, workspaceLink, onOpen }: C
       </div>
 
       <div className="border-y border-border/35 bg-background/35 p-3">
-        <div className="relative max-h-64 overflow-hidden rounded-xl border border-border/35 bg-background/55 px-3.5 py-3 text-[13px] leading-5 text-foreground/85 shadow-inner shadow-black/[0.03] [&_.markdown-body]:m-0 [&_.markdown-body_h1]:mt-0 [&_.markdown-body_h2]:mt-2 [&_.markdown-body_p]:my-1.5">
+        <div className="relative max-h-[28rem] overflow-hidden rounded-xl border border-border/35 bg-background/55 px-3.5 py-3 text-[13px] leading-5 text-foreground/85 shadow-inner shadow-black/[0.03] [&_.markdown-body]:m-0 [&_.markdown-body_h1]:mt-0 [&_.markdown-body_h2]:mt-2 [&_.markdown-body_p]:my-1.5">
           {content ? <Markdown content={content} /> : <p className="text-muted-foreground">No canvas content yet.</p>}
         </div>
       </div>

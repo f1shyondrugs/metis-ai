@@ -18,7 +18,9 @@ import "highlight.js/styles/github-dark.css";
 import { normalizeMath, splitStreamingMath } from "@/lib/math";
 import { LinkPreview } from "@/components/link-preview";
 import { ThinkingBlock } from "@/components/thinking-block";
+import { GraphBoard } from "@/components/graph-board";
 import { MermaidDiagram } from "@/components/mermaid-diagram";
+import { isGraphSource } from "@/lib/graph-spec";
 import { isMermaidSource, wrapBareMermaid } from "@/lib/mermaid";
 import { ExternalLink, Link2 } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -216,6 +218,9 @@ function CodeBlock({
     );
   }
   const declaredLanguage = className?.match(/language-([\w-]+)/)?.[1];
+  if (isGraphSource(declaredLanguage, code)) {
+    return <GraphBoard code={code} language={declaredLanguage} />;
+  }
   if (isMermaidSource(declaredLanguage, code)) {
     return <MermaidDiagram code={code} language={declaredLanguage} />;
   }
@@ -324,6 +329,7 @@ export const Markdown = memo(function Markdown({
 
   const markdownComponentsWithCode = {
     ...markdownComponents,
+    pre: ({ children }: HTMLAttributes<HTMLPreElement>) => <>{children}</>,
     code: CodeBlock,
     input: (props: InputHTMLAttributes<HTMLInputElement>) => (
       <TaskCheckbox {...props} interactive={interactiveTasks} />

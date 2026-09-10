@@ -1,11 +1,14 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  canvasFromToolPayload,
   compactFileDiff,
   compactToolPreview,
   classifyToolKind,
+  hydrateCanvasPreview,
   isToolRunning,
   layoutAssistantParts,
+  mergeChatMessages,
   planFromToolPayload,
   remoteClientHostnameMap,
   todosFromToolPayload,
@@ -14,6 +17,7 @@ import {
  memoryCardFromPayload,
  toolGroupLabel,
   truncateToolText,
+  workspaceIdFromLink,
 } from "../lib/tool-call-display";
 
 type LayoutTool = { id: string; callId?: string; name?: string; kind?: string; status?: string; input?: string; result?: string; todos?: Array<{ content: string }> };
@@ -163,6 +167,85 @@ test("planFromToolPayload deeply unwraps nested plan responses", () => {
     content: "Ship it.",
     workspaceLink: "workspace://plan/plan-42",
   });
+});
+
+test("canvasFromToolPayload skips empty edit results and keeps input markdown", () => {
+  const canvas = canvasFromToolPayload(
+    JSON.stringify({
+      title: "Kurven: Linear · Parabel · Sinus",
+      content: "# Kurven\n\n```graph\n{\"curves\":[]}\n```",
+    }),
+    JSON.stringify({
+      status: "success",
+      value: {
+        id: "845bcc13-ceb6-47b1-b80e-c65eb65e8b82",
+        title: "Canvas",
+        content: "",
+        workspaceLink: "workspace://canvas/845bcc13-ceb6-47b1-b80e-c65eb65e8b82",
+      },
+    }),
+  );
+  assert.equal(canvas?.title, "Kurven: Linear · Parabel · Sinus");
+  assert.match(canvas?.content || "", /```graph/);
+  assert.equal(canvas?.workspaceLink, "workspace://canvas/845bcc13-ceb6-47b1-b80e-c65eb65e8b82");
+});
+
+test("hydrateCanvasPreview prefers live workspace markdown over an empty edit result", () => {
+  const preview = hydrateCanvasPreview(
+    canvasFromToolPayload(
+      JSON.stringify({ title: "Canvas", content: "" }),
+      JSON.stringify({
+        id: "845bcc13-ceb6-47b1-b80e-c65eb65e8b82",
+        content: "",
+        workspaceLink: "workspace://canvas/845bcc13-ceb6-47b1-b80e-c65eb65e8b82",
+      }),
+    ),
+    [{
+      id: "845bcc13-ceb6-47b1-b80e-c65eb65e8b82",
+      type: "canvas",
+      name: "Kurven: Linear · Parabel · Sinus",
+      content: "# Kurven\n\n```graph\n{\"curves\":[]}\n```",
+    }],
+  );
+  assert.equal(preview?.title, "Kurven: Linear · Parabel · Sinus");
+  assert.match(preview?.content || "", /```graph/);
+});
+
+test("workspaceIdFromLink reads canvas ids and rejects the other kind", () => {
+  assert.equal(
+    workspaceIdFromLink("workspace://canvas/845bcc13-ceb6-47b1-b80e-c65eb65e8b82", "canvas"),
+    "845bcc13-ceb6-47b1-b80e-c65eb65e8b82",
+  );
+  assert.equal(
+    workspaceIdFromLink("workspace://canvas/845bcc13-ceb6-47b1-b80e-c65eb65e8b82", "plan"),
+    undefined,
+  );
+});
+
+test("mergeChatMessages keeps streamed text when a finished empty snapshot arrives late", () => {
+  const merged = mergeChatMessages(
+    [{ id: "asst-1", role: "assistant", content: "Schnell fertig.", streaming: false }],
+    [{ id: "asst-1", role: "assistant", content: "" }],
+  );
+  assert.equal(merged[0]?.content, "Schnell fertig.");
+});
+
+test("mergeChatMessages keeps longer live text while the assistant is still streaming", () => {
+  const merged = mergeChatMessages(
+    [{ id: "asst-1", role: "assistant", content: "Hello world", streaming: true }],
+    [{ id: "asst-1", role: "assistant", content: "Hello", streaming: true }],
+  );
+  assert.equal(merged[0]?.content, "Hello world");
+  assert.equal(merged[0]?.streaming, true);
+});
+
+test("mergeChatMessages preserves the optimistic assistant id during revalidation", () => {
+  const merged = mergeChatMessages(
+    [{ id: "a-local", role: "assistant", content: "Hello", streaming: true }],
+    [{ id: "a-server", role: "assistant", content: "Hello", streaming: true }],
+  );
+  assert.equal(merged.length, 1);
+  assert.equal(merged[0]?.id, "a-local");
 });
 
 test("layoutAssistantParts presents todo directly below the latest plan", () => {

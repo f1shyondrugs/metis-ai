@@ -268,6 +268,95 @@ export function planFromToolPayload(input?: string, result?: string, detail?: st
   return undefined;
 }
 
+export type CanvasPreview = {
+  title: string;
+  content: string;
+  workspaceLink?: string;
+};
+
+export function workspaceIdFromLink(link?: string, kind?: "canvas" | "plan"): string | undefined {
+  if (!link) return undefined;
+  const match = link.trim().match(/^workspace:\/\/(canvas|plan)\/([^/?#]+)/);
+  if (!match) return undefined;
+  if (kind && match[1] !== kind) return undefined;
+  return match[2];
+}
+
+export function canvasFromToolPayload(input?: string, result?: string, detail?: string): CanvasPreview | undefined {
+  let title = "";
+  let content = "";
+  let workspaceLink = "";
+  let id = "";
+  const titles: string[] = [];
+
+  for (const source of [result, input, detail]) {
+    if (!source) continue;
+    const record = unwrapToolRecord(source);
+    if (record) {
+      const canvas = nestedRecord(record, "canvas");
+      const value = nestedRecord(record, "value");
+      content ||= [
+        record.canvas,
+        record.content,
+        canvas.content,
+        value.canvas,
+        value.content,
+      ].map(nonEmptyString).find(Boolean) || "";
+      for (const candidate of [
+        record.title,
+        record.name,
+        canvas.title,
+        canvas.name,
+        value.title,
+        value.name,
+      ].map(nonEmptyString)) {
+        if (candidate) titles.push(candidate);
+      }
+      workspaceLink ||= [
+        record.workspaceLink,
+        canvas.workspaceLink,
+        value.workspaceLink,
+      ].map(nonEmptyString).find(Boolean) || "";
+      id ||= [
+        record.id,
+        canvas.id,
+        value.id,
+      ].map(nonEmptyString).find(Boolean) || "";
+    } else if (!content && source.trim() && !source.trim().startsWith("{")) {
+      content = source.trim();
+    }
+  }
+
+  title = titles.find((candidate) => candidate !== "Canvas") || titles[0] || "";
+  if (!content && !workspaceLink && !id) return undefined;
+  return {
+    title: title || "Canvas",
+    content,
+    ...(workspaceLink
+      ? { workspaceLink }
+      : id ? { workspaceLink: `workspace://canvas/${id}` } : {}),
+  };
+}
+
+export function hydrateCanvasPreview(
+  preview: CanvasPreview | undefined,
+  workspaces?: Array<{ id: string; type?: string; name?: string; content?: string }>,
+): CanvasPreview | undefined {
+  if (!preview && !workspaces?.length) return undefined;
+  const id = workspaceIdFromLink(preview?.workspaceLink, "canvas");
+  const live = id
+    ? workspaces?.find((item) => item.id === id && (item.type === "canvas" || !item.type))
+    : undefined;
+  if (!live) return preview && (preview.content || preview.workspaceLink) ? preview : undefined;
+  const liveTitle = typeof live.name === "string" ? live.name.trim() : "";
+  const liveContent = typeof live.content === "string" ? live.content : "";
+  return {
+    title: (liveTitle && liveTitle !== "Canvas" ? liveTitle : preview?.title) || liveTitle || "Canvas",
+    content: liveContent.trim() || preview?.content || "",
+    workspaceLink: `workspace://canvas/${live.id}`,
+  };
+}
+
 export function enrichToolDisplay(tool: {
   name: string;
   input?: string;
@@ -989,6 +1078,15 @@ export function messageLiveWeight(message: MergeableChatMessage) {
   );
 }
 
+export function messageTextLength(message: MergeableChatMessage) {
+  const parts = message.parts ?? [];
+  const partText = parts.reduce((sum, part) => {
+    if (part.type === "text" || part.type === "thinking") return sum + (part.content?.length || 0);
+    return sum;
+  }, 0);
+  return Math.max(message.content?.length || 0, partText);
+}
+
 export function adoptOptimisticAssistantId<T extends MergeableChatMessage>(current: T[], incoming: T[]) {
   const optimistic = [...current].reverse().find((message) => (
     message.role === "assistant" && message.streaming && message.id.startsWith("a-")
@@ -1001,19 +1099,36 @@ export function adoptOptimisticAssistantId<T extends MergeableChatMessage>(curre
 }
 
 export function mergeChatMessages<T extends MergeableChatMessage>(current: T[], incoming: T[]) {
-  const live = adoptOptimisticAssistantId(current, incoming);
+  const optimistic = [...current].reverse().find((message) => (
+    message.role === "assistant" && message.streaming && message.id.startsWith("a-")
+  ));
+  const serverAssistant = [...incoming].reverse().find((message) => message.role === "assistant");
+  const live = current;
+  const normalizedIncoming = optimistic && serverAssistant && optimistic.id !== serverAssistant.id
+    ? incoming.map((message) => (
+      message.id === serverAssistant.id
+        ? { ...message, id: optimistic.id }
+        : message
+    ))
+    : incoming;
   const byId = new Map(live.map((message) => [message.id, message]));
   const order = new Map(live.map((message, index) => [message.id, index]));
-  incoming.forEach((message) => {
+  normalizedIncoming.forEach((message) => {
     const existing = byId.get(message.id);
     if (!order.has(message.id)) order.set(message.id, order.size);
     if (!existing) {
       byId.set(message.id, message);
       return;
     }
+    const incomingText = messageTextLength(message);
+    const existingText = messageTextLength(existing);
+    const incomingWeight = messageLiveWeight(message);
+    const existingWeight = messageLiveWeight(existing);
     if (existing.streaming) {
-      const incomingWeight = messageLiveWeight(message);
-      const existingWeight = messageLiveWeight(existing);
+      if (incomingText < existingText) {
+        byId.set(message.id, { ...message, ...existing, streaming: true });
+        return;
+      }
       byId.set(
         message.id,
         incomingWeight > existingWeight
@@ -1022,7 +1137,21 @@ export function mergeChatMessages<T extends MergeableChatMessage>(current: T[], 
       );
       return;
     }
-    byId.set(message.id, message);
+    if (incomingText < existingText) {
+      byId.set(message.id, {
+        ...message,
+        ...existing,
+        streaming: false,
+        serverSequence: Math.max(existing.serverSequence || 0, message.serverSequence || 0) || existing.serverSequence,
+      });
+      return;
+    }
+    byId.set(message.id, {
+      ...existing,
+      ...message,
+      streaming: message.streaming,
+      content: message.content || existing.content,
+    });
   });
   return [...byId.values()].sort((a, b) => {
     const sequenceOrder = (a.serverSequence || 0) - (b.serverSequence || 0);

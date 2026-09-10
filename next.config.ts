@@ -2,6 +2,7 @@ import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
   eslint: { ignoreDuringBuilds: true },
+  transpilePackages: ["jsxgraph"],
   serverExternalPackages: ["@cursor/sdk"],
   distDir: process.env.NEXT_DIST_DIR || ".next",
   webpack: (config, { isServer }) => {
