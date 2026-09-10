@@ -9,6 +9,17 @@ import {
   versionFromReleaseTag,
   type ReleaseManifest,
 } from "@/lib/release-manifest";
+import {
+  commitChannelUpdateAvailable,
+  sameGitSha,
+} from "@/lib/update-display";
+
+export {
+  commitChannelUpdateAvailable,
+  formatUpdateInstalledLabel,
+  sameGitSha,
+  shortGitSha,
+} from "@/lib/update-display";
 
 const execFileAsync = promisify(execFile);
 const RELEASE_URL = "https://api.github.com/repos/f1shyondrugs/metis-ai/releases/latest";
@@ -91,16 +102,24 @@ export async function fetchLatestCommit(fetcher: typeof fetch = fetch): Promise<
 export async function resolveCurrentRef(root: string): Promise<string> {
   const configured = process.env.METIS_RELEASE_TAG?.trim();
   if (configured) return configured;
+  const head = await resolveCurrentGitHead(root);
+  if (head) return head;
+  try {
+    const packageJson = JSON.parse(await readFile(path.join(root, "package.json"), "utf8")) as { version?: unknown };
+    return typeof packageJson.version === "string" ? packageJson.version.trim() : "unknown";
+  } catch {
+    return "unknown";
+  }
+}
+
+export async function resolveCurrentGitHead(root: string): Promise<string | null> {
+  const configured = process.env.METIS_RELEASE_COMMIT?.trim() || process.env.GITHUB_SHA?.trim();
+  if (configured) return configured;
   try {
     const { stdout } = await execFileAsync("git", ["rev-parse", "HEAD"], { cwd: root, timeout: 2_000 });
-    return stdout.trim();
+    return stdout.trim() || null;
   } catch {
-    try {
-      const packageJson = JSON.parse(await readFile(path.join(root, "package.json"), "utf8")) as { version?: unknown };
-      return typeof packageJson.version === "string" ? packageJson.version.trim() : "unknown";
-    } catch {
-      return "unknown";
-    }
+    return null;
   }
 }
 
@@ -163,7 +182,13 @@ export async function checkForUpdate(
   const currentRef = currentManifest.tag || currentManifest.commit || "unknown";
   if (channel === "commits") {
     const commit = await fetchLatestCommit(fetcher);
-    const updateAvailable = Boolean(currentManifest.commit && commit.sha !== currentManifest.commit);
+    const checkoutSha = await resolveCurrentGitHead(root);
+    const updateAvailable = commitChannelUpdateAvailable(commit.sha, currentManifest.commit, checkoutSha);
+    const matchedRef = sameGitSha(commit.sha, currentManifest.commit)
+      ? currentManifest.commit
+      : sameGitSha(commit.sha, checkoutSha)
+        ? checkoutSha
+        : currentManifest.commit || checkoutSha;
     return {
       channel,
       status: updateAvailable ? "commit-available" : "up-to-date",
@@ -171,7 +196,7 @@ export async function checkForUpdate(
       latestCommit: commit.sha,
       commitUrl: commit.html_url,
       commitMessage: commit.commit?.message,
-      currentRef,
+      currentRef: matchedRef || currentRef,
       currentManifest,
       updateAvailable,
     };

@@ -2,7 +2,19 @@ import assert from "node:assert/strict";
 import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import test from "node:test";
-import { checkForUpdate, compareReleaseVersions, isReleaseNewer, type GithubRelease } from "../lib/github-releases";
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
+import {
+  checkForUpdate,
+  commitChannelUpdateAvailable,
+  compareReleaseVersions,
+  formatUpdateInstalledLabel,
+  isReleaseNewer,
+  sameGitSha,
+  type GithubRelease,
+} from "../lib/github-releases";
+
+const execFileAsync = promisify(execFile);
 
 const release = (tag: string, commit?: string): GithubRelease => ({
   tag_name: tag,
@@ -69,6 +81,58 @@ test("commit channel reports a newer master commit", async () => {
     assert.equal(result.status, "commit-available");
     assert.equal(result.latestCommit, "def456");
     assert.equal(result.updateAvailable, true);
+  } finally {
+    if (previousDistDir === undefined) delete process.env.NEXT_DIST_DIR;
+    else process.env.NEXT_DIST_DIR = previousDistDir;
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+const LIVE_SHA = "06c388caeb37eb4ba6e459ec0b051e0445e11b4f";
+const STALE_SHA = "a8344f452dd694072b49c93b83a43b8c729848de";
+
+test("sameGitSha matches full and abbreviated SHAs", () => {
+  assert.equal(sameGitSha(LIVE_SHA, "06c388caeb37"), true);
+  assert.equal(sameGitSha(LIVE_SHA, STALE_SHA), false);
+  assert.equal(sameGitSha("1.0.0", LIVE_SHA), false);
+});
+
+test("commit channel stays current when checkout HEAD already matches latest", () => {
+  assert.equal(commitChannelUpdateAvailable(LIVE_SHA, STALE_SHA, LIVE_SHA), false);
+  assert.equal(commitChannelUpdateAvailable(LIVE_SHA, STALE_SHA, STALE_SHA), true);
+  assert.equal(commitChannelUpdateAvailable(LIVE_SHA, LIVE_SHA, null), false);
+});
+
+test("commit channel installed label uses the SHA, not package version", () => {
+  assert.equal(formatUpdateInstalledLabel("commits", LIVE_SHA, "1.0.0"), "06c388caeb37");
+  assert.equal(formatUpdateInstalledLabel("releases", LIVE_SHA, "1.0.0"), "1.0.0");
+});
+
+test("commit channel is current when git HEAD matches latest even if the slot manifest is stale", async () => {
+  const root = await mkdtemp(`${os.tmpdir()}/metis-update-head-`);
+  const previousDistDir = process.env.NEXT_DIST_DIR;
+  try {
+    await execFileAsync("git", ["init"], { cwd: root });
+    await execFileAsync("git", ["config", "user.email", "test@example.com"], { cwd: root });
+    await execFileAsync("git", ["config", "user.name", "test"], { cwd: root });
+    await writeFile(`${root}/README.md`, "head match\n");
+    await execFileAsync("git", ["add", "README.md"], { cwd: root });
+    await execFileAsync("git", ["commit", "-m", "init"], { cwd: root });
+    const head = (await execFileAsync("git", ["rev-parse", "HEAD"], { cwd: root })).stdout.trim();
+    await mkdir(`${root}/.next`, { recursive: true });
+    await writeFile(`${root}/package.json`, JSON.stringify({ version: "1.0.0" }));
+    await writeFile(`${root}/.next/release-manifest.json`, JSON.stringify({
+      schemaVersion: 1, version: "1.0.0", packageVersion: "1.0.0", tag: null,
+      commit: STALE_SHA, channel: "development", isRelease: false, builtAt: new Date().toISOString(),
+    }));
+    process.env.NEXT_DIST_DIR = ".next";
+    const result = await checkForUpdate(root, async () => new Response(JSON.stringify({
+      sha: head, html_url: `https://github.com/f1shyondrugs/metis-ai/commit/${head}`,
+      commit: { message: "already checked out" },
+    }), { status: 200 }), "commits");
+    assert.equal(result.updateAvailable, false);
+    assert.equal(result.status, "up-to-date");
+    assert.equal(sameGitSha(result.currentRef, head), true);
   } finally {
     if (previousDistDir === undefined) delete process.env.NEXT_DIST_DIR;
     else process.env.NEXT_DIST_DIR = previousDistDir;

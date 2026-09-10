@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { GitBranch, LoaderCircle, RefreshCw } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { formatUpdateInstalledLabel } from "@/lib/update-display";
 import { cn } from "@/lib/utils";
 import { toast } from "sonner";
 
@@ -85,7 +86,8 @@ type UpdateSettingsState = {
   updateAvailable?: boolean;
   latestTag?: string;
   latestCommit?: string;
-  currentManifest?: { version?: string; tag?: string | null; channel?: string };
+  currentRef?: string;
+  currentManifest?: { version?: string; tag?: string | null; commit?: string | null; channel?: string };
 };
 
 type UpdateScheduleState = {
@@ -344,7 +346,11 @@ export function UpdateSettingsPanel({
     return <p className="text-sm text-muted-foreground">Updates are available to host administrators.</p>;
   }
   const available = Boolean(state?.updateAvailable);
-  const current = state?.currentManifest?.version || "development checkout";
+  const current = formatUpdateInstalledLabel(
+    channel,
+    state?.currentRef || state?.currentManifest?.commit,
+    state?.currentManifest?.tag || state?.currentManifest?.version,
+  );
   const target = channel === "releases" ? state?.latestTag || "latest stable release" : state?.latestCommit?.slice(0, 12) || "latest master commit";
 
   return (
