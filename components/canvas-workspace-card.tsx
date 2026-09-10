@@ -17,8 +17,9 @@ export function CanvasWorkspaceCard({ title, content, workspaceLink, onOpen }: C
   const stats = useMemo(() => {
     const diagrams = (content.match(/```(?:mermaid|graphviz|dot)\b/gi) || []).length;
     const graphs = (content.match(/```(?:graph|jsxgraph|geogebra|plot)\b/gi) || []).length;
+    const charts = (content.match(/```(?:chart|charts)\b/gi) || []).length;
     const headings = (content.match(/^#{1,3}\s+\S/gm) || []).length;
-    return { diagrams, graphs, headings };
+    return { diagrams, graphs, charts, headings };
   }, [content]);
 
   async function copyRawContent() {
@@ -43,6 +44,7 @@ export function CanvasWorkspaceCard({ title, content, workspaceLink, onOpen }: C
             <span className="text-[10px] font-semibold uppercase tracking-[0.13em] text-violet-300/85">Canvas</span>
             {stats.diagrams ? <span className="text-[10px] text-muted-foreground/65">{stats.diagrams} diagram{stats.diagrams === 1 ? "" : "s"}</span> : null}
             {stats.graphs ? <span className="text-[10px] text-muted-foreground/65">{stats.graphs} graph{stats.graphs === 1 ? "" : "s"}</span> : null}
+            {stats.charts ? <span className="text-[10px] text-muted-foreground/65">{stats.charts} chart{stats.charts === 1 ? "" : "s"}</span> : null}
             {!stats.diagrams && stats.headings ? <span className="text-[10px] text-muted-foreground/65">{stats.headings} sections</span> : null}
           </div>
           <h3 className="mt-0.5 truncate text-sm font-semibold tracking-tight text-foreground" title={title}>{title}</h3>

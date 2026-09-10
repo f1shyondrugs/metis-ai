@@ -19,7 +19,9 @@ import { normalizeMath, splitStreamingMath } from "@/lib/math";
 import { LinkPreview } from "@/components/link-preview";
 import { ThinkingBlock } from "@/components/thinking-block";
 import { GraphBoard } from "@/components/graph-board";
+import { ChartBoard } from "@/components/chart-board";
 import { MermaidDiagram } from "@/components/mermaid-diagram";
+import { isChartSource } from "@/lib/chart-spec";
 import { isGraphSource } from "@/lib/graph-spec";
 import { isMermaidSource, wrapBareMermaid } from "@/lib/mermaid";
 import { ExternalLink, Link2 } from "lucide-react";
@@ -218,6 +220,9 @@ function CodeBlock({
     );
   }
   const declaredLanguage = className?.match(/language-([\w-]+)/)?.[1];
+  if (isChartSource(declaredLanguage, code)) {
+    return <ChartBoard code={code} language={declaredLanguage} />;
+  }
   if (isGraphSource(declaredLanguage, code)) {
     return <GraphBoard code={code} language={declaredLanguage} />;
   }

@@ -17,6 +17,11 @@ function nodeToMarkdown(node: Node, listDepth = 0): string {
 
   const element = node as HTMLElement;
   if (element.hasAttribute("data-md-caret-mark")) return "";
+  const chart = element.getAttribute("data-chart-source")
+    || (element.getAttribute("data-editor-control") === "chart"
+      ? element.querySelector("[data-chart-source]")?.getAttribute("data-chart-source")
+      : "");
+  if (chart) return `\`\`\`chart\n${chart.replace(/\n$/, "")}\n\`\`\`\n\n`;
   const graph = element.getAttribute("data-graph-source")
     || (element.getAttribute("data-editor-control") === "graph"
       ? element.querySelector("[data-graph-source]")?.getAttribute("data-graph-source")
@@ -42,6 +47,10 @@ function nodeToMarkdown(node: Node, listDepth = 0): string {
     return `\`${children}\``;
   }
   if (tag === "pre") {
+    const chart = element.getAttribute("data-chart-source")
+      || element.querySelector("[data-chart-source]")?.getAttribute("data-chart-source")
+      || "";
+    if (chart) return `\`\`\`chart\n${chart.replace(/\n$/, "")}\n\`\`\`\n\n`;
     const graph = element.getAttribute("data-graph-source")
       || element.querySelector("[data-graph-source]")?.getAttribute("data-graph-source")
       || "";

@@ -16,6 +16,12 @@ test("user messages render markdown links instead of visible brackets", () => {
   assert.match(userText, /part\.label/);
 });
 
+test("markdown renders chart fences with ChartBoard before graph fences", () => {
+  assert.match(markdown, /isChartSource/);
+  assert.match(markdown, /<ChartBoard code=\{code\}/);
+  assert.ok(markdown.indexOf("isChartSource") < markdown.indexOf("isGraphSource"));
+});
+
 test("markdown renders graph fences with GraphBoard", () => {
   assert.match(markdown, /isGraphSource/);
   assert.match(markdown, /<GraphBoard code=\{code\}/);
@@ -27,6 +33,14 @@ test("editable markdown shows muted caret source marks", () => {
   assert.match(editor, /text-muted-foreground select-none/);
   assert.match(editor, /function applyCaretMarks/);
   assert.match(editor, /if \(element\.hasAttribute\("data-md-caret-mark"\)\) return "";/);
+});
+
+test("editable markdown serializes chart boards like mermaid and graph", () => {
+  assert.match(editor, /data-chart-source/);
+  assert.match(editor, /data-editor-control"\) === "chart"/);
+  assert.match(editor, /element.querySelector\("\[data-chart-source\]"\)/);
+  assert.match(editor, /`\\`\\`chart\\n\$\{chart\.replace/);
+  assert.match(editor, /tag === "pre"/);
 });
 
 test("editable markdown serializes graph boards like mermaid", () => {
