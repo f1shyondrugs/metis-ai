@@ -25,14 +25,9 @@ Stale `running` jobs are reaped with a **15-minute cutoff** and lease-based
 One interactive slot is reserved so heavy browser/MCP jobs cannot take the
 whole pool (BUG-C3 partial). There are still no priority classes.
 
-## Known P0 (11 Sep 2026)
-
-`reconcileSubagentParent` currently calls `appendMessage` inside an
-`enqueueJob` transaction. SQLite then throws `cannot start a transaction within
-a transaction` and the **worker process exits 1**, killing in-flight jobs.
-Fix: `appendMessageInTransaction` plus a nesting guard. Details:
-[PRODUCTION-AUDIT.md](./PRODUCTION-AUDIT.md) P0-2.
-
+`reconcileSubagentParent` appends the lifecycle-review message with
+`appendMessageInTransaction` inside the enqueue transaction. `transaction()`
+nests with SAVEPOINT so a nested writer cannot fatal-exit the worker.
 ## Resource limits
 
 Units `metis-ai`, `metis-ai-worker`, and `metis-ai-mcp` had no `MemoryMax` /

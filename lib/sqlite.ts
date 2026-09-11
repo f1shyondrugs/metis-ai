@@ -252,6 +252,7 @@ export function getDatabase(): DatabaseSync {
       updated_at TEXT NOT NULL
     );
     CREATE INDEX IF NOT EXISTS chats_owner_updated ON chats(owner_id, updated_at DESC);
+    CREATE INDEX IF NOT EXISTS chats_share_id ON chats(json_extract(data, '$.share.id'));
     CREATE TABLE IF NOT EXISTS tool_revert_snapshots (
       chat_id TEXT NOT NULL REFERENCES chats(id) ON DELETE CASCADE,
       message_id TEXT NOT NULL,
@@ -649,6 +650,23 @@ export function withSqliteRetry<T>(fn: () => T, attempts = 8): T {
 export function transaction<T>(fn: () => T): T {
   return withSqliteRetry(() => {
     const db = getDatabase();
+    if (db.isTransaction) {
+      const name = `sp_${randomUUID().replaceAll("-", "")}`;
+      db.exec(`SAVEPOINT ${name}`);
+      try {
+        const result = fn();
+        db.exec(`RELEASE ${name}`);
+        return result;
+      } catch (error) {
+        try {
+          db.exec(`ROLLBACK TO ${name}`);
+          db.exec(`RELEASE ${name}`);
+        } catch {
+          // Savepoint may already be gone after a connection-level rollback.
+        }
+        throw error;
+      }
+    }
     db.exec("BEGIN IMMEDIATE");
     try {
       const result = fn();

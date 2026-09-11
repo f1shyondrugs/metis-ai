@@ -33,11 +33,10 @@ lookups require an explicit matching `owner_id`; ownerless legacy rows are not
 available through authenticated routes.
 
 The default MCP listener binds to `127.0.0.1`. That is a network boundary, **not
-authentication**. Require `MCP_BEARER_TOKEN` even for localhost callers, and do
-not expose the listener publicly unless an authenticated, trusted proxy is in
-front of it. Keep `MCP_ALLOW_REMOTE_ADMIN=false` unless remote administration is
-explicitly required.
+authentication**. Unauthenticated callers are rejected even on localhost.
+Require `MCP_BEARER_TOKEN` or a signed Metis session. Keep
+`MCP_ALLOW_REMOTE_ADMIN=false` unless remote administration is explicitly
+required.
 
-Known open issues (11 Sep 2026), including the localhost unauthenticated
-session path, XFF rate-limit bypass, and legacy header auth, are tracked in
+Remaining production issues are tracked in
 [`docs/PRODUCTION-AUDIT.md`](./docs/PRODUCTION-AUDIT.md).

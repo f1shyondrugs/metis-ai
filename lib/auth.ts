@@ -82,9 +82,13 @@ export async function getAuthenticatedUser(req?: Request): Promise<User | null> 
   const legacyPassword = req?.headers.get("x-chat-password");
   const legacyUser = req?.headers.get("x-chat-username")?.trim();
   const migrated = users();
-  if (legacyPassword && passwordMatches(legacyPassword)) {
-    // The legacy shared password is only a migration bridge. Without an
-    // explicit username it must not select an arbitrary account.
+  if (
+    process.env.CHAT_LEGACY_HEADER_AUTH === "true" &&
+    legacyPassword &&
+    passwordMatches(legacyPassword)
+  ) {
+    // Off by default. The shared password plus a caller-chosen username is an
+    // impersonation path; keep it only as an explicit migration bridge.
     if (!legacyUser) return null;
     return migrated.find((user) => user.username === legacyUser) ?? null;
   }
@@ -93,8 +97,9 @@ export async function getAuthenticatedUser(req?: Request): Promise<User | null> 
     .map((part) => part.trim())
     .find((part) => part.startsWith(`${CHAT_COOKIE}=`))
     ?.slice(CHAT_COOKIE.length + 1);
-  const jar = requestCookie ? null : await cookies();
-  const token = requestCookie || jar?.get(CHAT_COOKIE)?.value;
+  const token = req
+    ? requestCookie
+    : (await cookies())?.get(CHAT_COOKIE)?.value;
   if (!token) return null;
   const session = getDatabase().prepare(
     `SELECT s.user_id as userId, s.expires_at as expiresAt,

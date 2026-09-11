@@ -1,4 +1,5 @@
 import { getAuthenticatedUserId, isAuthenticated } from "@/lib/auth";
+import { requestClientAddress } from "@/lib/rate-limit";
 import {
   isErrorLogLevel,
   isErrorLogSource,
@@ -34,8 +35,7 @@ function rateLimit(key: string): boolean {
 }
 
 function clientKey(req: Request, userId: string) {
-  const forwarded = req.headers.get("x-forwarded-for")?.split(",")[0]?.trim();
-  return userId || forwarded || "anonymous";
+  return userId || requestClientAddress(req) || "anonymous";
 }
 
 function validateEntry(

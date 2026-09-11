@@ -185,30 +185,11 @@ export async function POST(req: Request) {
           )
           .slice(0, MAX_ATTACHMENTS)
       : [];
-    let stored = [];
-    try {
-      stored = attachments.length
-        ? saveAttachments(chatId, attachments, ownerId).stored
-        : [];
-    } catch (error) {
-      return Response.json({ error: String(error) }, { status: 400 });
-    }
+    const stored: Awaited<ReturnType<typeof saveAttachments>>["stored"] = [];
     const messageId = requestedMessageId || crypto.randomUUID();
     const streamDeviceId = body.streamDeviceId?.trim().slice(0, 120)
       || req.headers.get("x-metis-device-id")?.trim().slice(0, 120)
       || undefined;
-    const userMessage = {
-      id: messageId,
-      role: "user" as const,
-      content:
-        message ||
-        `Attached ${stored.length} file${stored.length === 1 ? "" : "s"}`,
-      ...(referenceText ? { referenceText } : {}),
-      ...(references.length ? { references } : {}),
-      ...((stored.length ? stored : storedAttachments).length
-        ? { attachments: stored.length ? stored : storedAttachments }
-        : {}),
-    };
     let job;
     try {
       job = enqueueJob({
@@ -225,13 +206,26 @@ export async function POST(req: Request) {
         ...(body.agentId ? { agentId: body.agentId } : {}),
         ...(requestedModelId ? { modelId: requestedModelId } : {}),
         ...(body.modelParams ? { modelParams: stripRemovedModelParams(body.modelParams) ?? [] } : {}),
-        ...((stored.length ? stored : storedAttachments).length
-          ? { attachments: stored.length ? stored : storedAttachments }
-          : {}),
+        attachments: stored,
         ...(chat.incognito ? { incognito: true } : {}),
         ...(streamDeviceId ? { streamDeviceId } : {}),
       }, {
         beforeInsert: () => {
+          if (storedAttachments.length) stored.push(...storedAttachments);
+          if (attachments.length) {
+            stored.push(...saveAttachments(chatId, attachments, ownerId).stored);
+          }
+          const resolvedAttachments = stored.length ? stored : storedAttachments;
+          const userMessage = {
+            id: messageId,
+            role: "user" as const,
+            content:
+              message ||
+              `Attached ${resolvedAttachments.length} file${resolvedAttachments.length === 1 ? "" : "s"}`,
+            ...(referenceText ? { referenceText } : {}),
+            ...(references.length ? { references } : {}),
+            ...(resolvedAttachments.length ? { attachments: resolvedAttachments } : {}),
+          };
           const appended = appendMessageInTransaction(chatId, userMessage, ownerId);
           if (!appended) throw new Error("Chat not found while enqueueing message");
         },
@@ -245,6 +239,9 @@ export async function POST(req: Request) {
           },
           { status: 409 },
         );
+      }
+      if (error instanceof Error) {
+        return Response.json({ error: String(error) }, { status: 400 });
       }
       throw error;
     }

@@ -32,6 +32,12 @@ export function resetRateLimit(key: string) {
 }
 
 export function requestClientAddress(req: Request) {
-  const forwarded = req.headers.get("x-forwarded-for")?.split(",")[0]?.trim();
-  return (forwarded || req.headers.get("x-real-ip")?.trim() || "unknown").slice(0, 128);
+  const realIp = req.headers.get("x-real-ip")?.trim();
+  if (realIp) return realIp.slice(0, 128);
+  const forwarded = req.headers.get("x-forwarded-for");
+  if (forwarded) {
+    const hops = forwarded.split(",").map((part) => part.trim()).filter(Boolean);
+    return (hops.at(-1) || "unknown").slice(0, 128);
+  }
+  return "unknown";
 }

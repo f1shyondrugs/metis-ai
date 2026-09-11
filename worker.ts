@@ -4,7 +4,7 @@ import { spawn } from "node:child_process";
 import { writeWorkerHeartbeat } from "@/lib/worker-health";
 import { appendRunEvent, cancelChildJobs, claimNextJob, drainNextQueuedMessage, enqueueJob, getActiveParentJob, getJob, listChildJobs, reapExpiredJobLeases, recoverStaleJobs, requeueSwitchingJob, updateJob } from "@/lib/db-jobs";
 import { snapshotInterruptedJob } from "@/lib/recovery";
-import { appendMessage, getChat, listChatsWithQueuedMessages, updateChat, upsertMessage } from "@/lib/db-store";
+import { appendMessage, appendMessageInTransaction, getChat, listChatsWithQueuedMessages, updateChat, upsertMessage } from "@/lib/db-store";
 import { expirePendingQuestions } from "@/lib/db-questions";
 import {
   claimDueAutomations,
@@ -275,11 +275,11 @@ function reconcileSubagentParent(parentJobId: string) {
  subagentFollowUp: true,
  ...(parent.maxRuntimeMs ? { maxRuntimeMs: parent.maxRuntimeMs } : {}),
  }, {
- beforeInsert: () => appendMessage(parent.chatId, {
+ beforeInsert: () => appendMessageInTransaction(parent.chatId, {
  id: messageId,
  role: "user",
  content: reviewPrompt,
- }),
+ }, parent.userId),
  });
  updateChat(parent.chatId, {
  runStatus: "running",

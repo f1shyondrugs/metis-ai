@@ -197,21 +197,8 @@ export async function POST(req: Request) {
         { status: 409 },
       );
     }
-    let stored = [];
-    try {
-      stored = body.attachments?.length
-        ? saveAttachments(chat.id, body.attachments, userId).stored
-        : [];
-    } catch (error) {
-      return Response.json({ error: String(error) }, { status: 400 });
-    }
+    const stored: Awaited<ReturnType<typeof saveAttachments>>["stored"] = [];
     const messageId = body.messageId?.trim();
-    const userMessage = {
-      id: messageId,
-      role: "user",
-      content: message || "Attached files",
-      ...(stored.length ? { attachments: stored } : {}),
-    } as const;
     let job;
     try {
       job = enqueueJob({
@@ -225,9 +212,18 @@ export async function POST(req: Request) {
         ...(body.agentId ? { agentId: body.agentId } : {}),
         ...(requestedModelId ? { modelId: requestedModelId } : {}),
         ...(body.modelParams ? { modelParams: stripRemovedModelParams(body.modelParams) ?? [] } : {}),
-        ...(stored.length ? { attachments: stored } : {}),
+        attachments: stored,
       }, {
         beforeInsert: () => {
+          if (body.attachments?.length) {
+            stored.push(...saveAttachments(chat.id, body.attachments, userId).stored);
+          }
+          const userMessage = {
+            id: messageId,
+            role: "user" as const,
+            content: message || "Attached files",
+            ...(stored.length ? { attachments: stored } : {}),
+          };
           const appended = appendMessageInTransaction(chat.id, userMessage, userId);
           if (!appended) throw new Error("Chat disappeared while enqueueing message.");
         },
@@ -241,6 +237,9 @@ export async function POST(req: Request) {
           },
           { status: 409 },
         );
+      }
+      if (error instanceof Error) {
+        return Response.json({ error: String(error) }, { status: 400 });
       }
       throw error;
     }

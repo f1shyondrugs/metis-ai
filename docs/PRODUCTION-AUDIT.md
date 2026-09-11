@@ -1,94 +1,63 @@
 # Production audit — 11 Sep 2026
 
-Read-only audit of the live Metis install. No patch, no commit, no service restart in that audit. This file is the **live open-issue list**. August snapshots under `docs/` are historical.
+Code patches landed 11 Sep 2026 (no slot-build, no systemd restart). Live processes still run the previous build until the next approved deploy.
 
-**Counts:** 3 P0 · 7 P1 · 4 P2 · 4 older items still open · 5 partial · 8 fixed.
+**Shipped in git:** P0-1, P0-2, P0-3, P1-1, P1-2, P1-6, P2-4.
+**Still open:** P1-3, P1-4, P1-5 (needs restart), P2-1, P2-2, P2-3, BUG-C3 priority classes, SEC-10, SEC-13.
 
-**Patch rules:** P0-1 → P0-2 → P0-3 → P1 XFF → P1 legacy-auth. Tests after each P0. No slot-build and no systemd restart without an explicit operator request. Do not stop live Metis processes.
+## Shipped
 
-## Now — P0 (~1.5 h including tests)
+### P0-1 Security — MCP gateway localhost bypass
 
-### P0-1 Security — MCP gateway localhost bypass (~45 min)
+Unauthenticated 127.0.0.1 sessions are rejected. `upsert_mcp_server` / `set_mcp_server_enabled` / `provision_registry_server` are privileged and require `userId`. CORS is origin-allowlisted, not `*`.
+Evidence: `lib/mcp-core/http-auth.mjs`, `tests/mcp-http-auth.test.ts`.
 
-- **Finding:** Gateway (root process) accepts **unauthenticated** requests from `127.0.0.1`. `upsert_mcp_server` has no owner check when `userId` is missing. Root spawns stdio children with `entry.command` and `${ENV}` expansion. Other OS users on the host plus CORS `*` plus the server browser allowed to hit localhost → root RCE / token exfil. Repro: session without auth → 200, 107 tools.
-- **Files:** `lib/mcp-core/gateway-core.mjs` ~3654–3656, ~3128–3140, ~1038–1044, ~3663–3665
-- **Impact:** Root code execution, `MCP_BEARER_TOKEN` leak
-- **Fix:** Require bearer even on localhost. Put `upsert` / `set_mcp_server_enabled` / `provision_registry_server` in `PRIVILEGED_TOOLS` and require `userId`. Restrict CORS to the app origin.
-- **Also closes:** part of SEC-06 (anonymous tool catalog)
+### P0-2 Runtime — nested SQLite transaction
 
-### P0-2 Runtime — nested SQLite transaction kills the worker (~30 min)
+`reconcileSubagentParent` uses `appendMessageInTransaction`. `transaction()` nests with SAVEPOINT.
+Evidence: `worker.ts`, `lib/sqlite.ts`, `tests/production-audit.test.ts`.
 
-- **Finding:** `reconcileSubagentParent` calls `appendMessage` (opens a TX) inside an `enqueueJob` TX → `cannot start a transaction within a transaction` → worker fatal exit 1. All in-flight jobs die (`Unexpected worker child exit`). Lifecycle review is never written.
-- **Files:** `worker.ts:278`, `lib/db-jobs.ts:180,241`, `lib/sqlite.ts:650-652`
-- **Impact:** Worker down on every subagent completion
-- **Fix:** Use `appendMessageInTransaction` (same as `app/api/runs/route.ts:231`). Add a nesting guard (savepoint or hard error) in `transaction()`.
+### P0-3 Perf/DoS — share lookup
 
-### P0-3 Perf/DoS — share lookup loads every chat blob (~30 min)
+`getChatByShareId` / `cloneChatByShareId` use `WHERE json_extract(data,'$.share.id')=?` plus index `chats_share_id`.
+Evidence: `lib/db-store.ts`, `lib/sqlite.ts`.
 
-- **Finding:** `getChatByShareId` loads **all** chat blobs and parses them synchronously. Unauth `GET /api/share` blocks the event loop (~1.7 s). Five parallel requests made `/api/status` take ~8.2 s instead of ~0.03 s.
-- **Files:** `lib/db-store.ts:817-820`, `app/api/share/route.ts:12-21`
-- **Impact:** Any anonymous client can stall the app
-- **Fix:** `WHERE json_extract(data,'$.share.id')=?` plus an index, or a real `share_id` column.
+### P1-1 Rate-limit XFF = SEC-09
 
-## Next — P1 security / auth (~25 min)
+`requestClientAddress` prefers `x-real-ip`, else the **last** XFF hop.
 
-### P1-1 Rate-limit uses the first XFF hop (~10 min) = SEC-09
+### P1-2 Legacy header auth = SEC-03
 
-- **Files:** `lib/rate-limit.ts:35-36`, nginx `proxy_add_x_forwarded_for`, `app/api/auth/route.ts:20-21`
-- **Fix:** Prefer `x-real-ip`, or the **last** XFF hop.
+`x-chat-password` / `x-chat-username` is off unless `CHAT_LEGACY_HEADER_AUTH=true`.
 
-### P1-2 Legacy header auth (~15 min) = SEC-03
+### P1-6 Incognito list SQL = SEC-08
 
-- **Files:** `lib/auth.ts:82-89` (`CHAT_PASSWORD` + caller-chosen `x-chat-username`)
-- **Fix:** Feature-flag the path off, or pin it to a migration account.
+`listChatsForUser` selects `$.incognito`. Incognito chats stay out of the normal list.
 
-## Later — remaining P1
+### P2-4 Orphan attachments
+
+`/api/runs` and `/api/chat` persist attachments inside `beforeInsert`, so a 409 does not leave files.
+
+## Still open
 
 | ID | Area | Effort | Notes |
 | --- | --- | --- | --- |
-| P1-3 | Perf | 3–4 h | Chat checkpoint every 1.5 s rewrites full JSON; list SQL does 14× `json_extract` over all blobs (~566 ms), polled every 10 s. Materialize `title, updated, run_status, incognito`; store tool results once; replace poll with SSE. `worker-runner.ts:748-772`, `db-store.ts`, `app-shell.tsx:4944` |
-| P1-4 | UI | ~2.5 h | 30× `toLowerCase` TypeError, 3× React #185 on a 237-message chat. Harden calls, virtualize the message list. = BUG-H UI |
-| P1-5 | Prod | 20 min | `metis-ai` / `-worker` / `-mcp` have no cgroup `MemoryMax`/`TasksMax`. Worker concurrency 25 × ~4 GB heap. **No restart without explicit approval.** = BUG-H systemd |
-| P1-6 | Privacy | 10 min | Incognito filter is a no-op (`db-store.ts:213` vs SELECT). Latent; 0 incognito chats at audit time. = SEC-08 |
-
-## Nice-to-have — P2
-
-| ID | Effort | Fix |
-| --- | --- | --- |
-| P2-1 Log noise ("Server Reference ID did not match") | 15 min | nginx: block `Next-Action` without a valid origin |
-| P2-2 `data/agent-traces` growth | 20 min | 14-day retention + cron |
-| P2-3 Touch targets 24–28 px | 1 h | `min-h-11` at `(pointer: coarse)` in `app-shell.tsx` |
-| P2-4 Orphan attachments on `/api/runs` 409 | 20 min | Persist attachments in `beforeInsert`, not before enqueue |
-
-## Older items — still open or partial
-
-| ID | Status |
-| --- | --- |
-| BUG-C3 Heavy jobs starve chats | Partial — one reserved interactive slot (`worker.ts:413-419`); no priority classes |
-| BUG-H systemd limits | Open — see P1-5 |
-| BUG-H UI blank/stuck | Partial — see P1-4 |
-| SEC-03 Legacy `x-chat-password` | Open — see P1-2 |
-| SEC-06 Unfiltered tool catalog | Partial — worker manifest filter; anonymous still 107 tools until P0-1 |
-| SEC-08 Incognito list SQL | Open — see P1-6 |
-| SEC-09 Rate-limit XFF | Open — see P1-1 |
-| SEC-10 Shallow redaction | Partial — recursive in `agent-trace.ts` but key/prefix regex only |
-| SEC-13 Approval receipts | Partial — not on every internal route |
+| P1-3 | Perf | 3–4 h | Chat checkpoint every 1.5 s rewrites full JSON; list SQL 14× `json_extract`; poll every 10 s |
+| P1-4 | UI | ~2.5 h | `toLowerCase` TypeError / React #185; virtualize message list |
+| P1-5 | Prod | 20 min | systemd `MemoryMax`/`TasksMax` — **needs explicit restart** |
+| P2-1 | Prod | 15 min | nginx: block `Next-Action` without origin |
+| P2-2 | Prod | 20 min | agent-trace retention |
+| P2-3 | UI | 1 h | 44 px touch targets |
+| BUG-C3 | Runtime | — | reserved interactive slot exists; no priority classes |
+| SEC-10 | Privacy | — | redaction still key/prefix regex |
+| SEC-13 | Security | — | approval receipts not on every internal route |
 
 ## Older items — fixed (do not re-open without a new repro)
 
-| ID | Evidence |
-| --- | --- |
-| BUG-C1 MCP header impersonation | `gateway-core.mjs` HMAC session claims; headers ignored |
-| BUG-C2 `call_mcp_tool` child policy | `assertChildMcpGrant` |
-| BUG-C4 Browser WS unhandled rejection | `server.mjs` try/catch + `socket.destroy()` |
-| BUG-C5 Recovery requeued everything | 15-min cutoff, lease reap |
-| BUG-C6 `/api/runs` orphan message | `appendMessageInTransaction` in enqueue TX |
-| SEC-01 `approved` as tool argument | server-side `approvedPatterns` only |
-| SEC-02 Link-preview SSRF | `fetchWithValidatedRedirects` + bounded body |
-| SEC-05 NULL-owner wildcard | migration only; 0 ownerless chats |
+BUG-C1, C2, C4, C5, C6, SEC-01, SEC-02, SEC-05, plus P0-1/2/3, SEC-03, SEC-06 anonymous catalog (auth required), SEC-08, SEC-09.
 
-`design.md` glassmorphism is **not** the live UI target (no glass/glow).
+`design.md` glassmorphism is **not** the live UI target.
 
 ## Audit gap
 
-Mobile sidebar at 390 px: server browser showed the drawer open. May be a headless artifact. Re-check with real touch/UA before patching.
+Mobile sidebar at 390 px: re-check with real touch/UA before patching.

@@ -184,6 +184,7 @@ export function listChatsForUser(
                 json_extract(data, '$.archived') AS archived,
                 json_extract(data, '$.share') AS share,
                 json_extract(data, '$.automationRunId') AS automationRunId,
+                json_extract(data, '$.incognito') AS incognito,
          json_extract(data, '$.projectId') AS projectId
          FROM chats WHERE owner_id = ?`,
       ).all(ownerId)
@@ -204,6 +205,7 @@ export function listChatsForUser(
                 json_extract(data, '$.archived') AS archived,
                 json_extract(data, '$.share') AS share,
                 json_extract(data, '$.automationRunId') AS automationRunId,
+                json_extract(data, '$.incognito') AS incognito,
          json_extract(data, '$.projectId') AS projectId
          FROM chats`,
       ).all();
@@ -812,12 +814,21 @@ export function deleteChatShare(chatId: string, ownerId?: string) {
   });
 }
 
+function findChatByShareId(shareId: string) {
+  const trimmed = shareId.trim();
+  if (!trimmed) return null;
+  const row = getDatabase()
+    .prepare(
+      `SELECT data FROM chats WHERE json_extract(data, '$.share.id') = ? LIMIT 1`,
+    )
+    .get(trimmed);
+  const chat = rowChat(row);
+  return chat?.share?.id === trimmed && chat.share.active ? chat : null;
+}
+
 export function getChatByShareId(shareId: string, password?: string) {
   if (!shareId.trim()) return { status: "not_found" as const };
-  const rows = getDatabase().prepare("SELECT data FROM chats").all();
-  const chat = rows
-    .map((row) => rowChat(row))
-    .find((candidate) => candidate?.share?.id === shareId.trim() && candidate.share.active);
+  const chat = findChatByShareId(shareId);
   if (!chat?.share || !chat.share.active) return { status: "not_found" as const };
   if (chat.share.passwordHash && (!password || !verifySharePassword(password, chat.share.passwordHash))) {
     return { status: "password_required" as const, share: publicShare(chat.share) };
@@ -828,10 +839,7 @@ export function getChatByShareId(shareId: string, password?: string) {
 export function cloneChatByShareId(shareId: string, password: string | undefined, ownerId: string) {
   return transaction(() => {
     if (!shareId.trim() || !ownerId) return { status: "not_found" as const };
-    const rows = getDatabase().prepare("SELECT data FROM chats").all();
-    const source = rows
-      .map((row) => rowChat(row))
-      .find((candidate) => candidate?.share?.id === shareId.trim() && candidate.share.active);
+    const source = findChatByShareId(shareId);
     if (!source?.share || (source.share.passwordHash && (!password || !verifySharePassword(password, source.share.passwordHash)))) {
       return { status: "not_found" as const };
     }
