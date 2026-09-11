@@ -84,6 +84,27 @@ test("all platform installers expose an explicit network-host option", () => {
   }
 });
 
+test("linux native installer installs C/C++ build tools before pnpm install", () => {
+  const content = readFileSync(path.join(root, "install", "linux.sh"), "utf8");
+  const published = readFileSync(path.join(installerDir, "linux.sh"), "utf8");
+  for (const source of [content, published]) {
+    assert.match(source, /ensure_native_build_tools/);
+    assert.match(source, /build-essential/);
+    const toolsAt = source.indexOf("ensure_native_build_tools\n(");
+    const pnpmAt = source.indexOf("pnpm install --frozen-lockfile");
+    assert.ok(toolsAt >= 0 && pnpmAt > toolsAt, "build tools must be ensured before pnpm install");
+  }
+});
+
+test("unix bootstrap remaps the v1.0.0 install base to current master scripts", () => {
+  const bootstrap = readFileSync(path.join(root, "install.sh"), "utf8");
+  const published = readFileSync(path.join(installerDir, "install.sh"), "utf8");
+  for (const source of [bootstrap, published]) {
+    assert.match(source, /raw\.githubusercontent\.com\/f1shyondrugs\/metis-ai\/v1\.0\.0/);
+    assert.match(source, /base="https:\/\/raw\.githubusercontent\.com\/f1shyondrugs\/metis-ai\/master"/);
+  }
+});
+
 test("unix bootstrap downloads a file then execs it instead of running from a pipe", () => {
   const bootstrap = readFileSync(path.join(root, "install.sh"), "utf8");
   assert.match(bootstrap, /metis_install\(\)/);

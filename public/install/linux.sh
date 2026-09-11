@@ -22,17 +22,48 @@ confirm_install() {
   [[ -z "$answer" || "$answer" =~ ^([Yy][Ee][Ss]|[Yy])$ ]]
 }
 
+run_privileged() {
+  if [[ "$(id -u)" -eq 0 ]]; then
+    "$@"
+  else
+    command -v sudo >/dev/null 2>&1 || die "sudo is required to install system packages."
+    sudo "$@"
+  fi
+}
+
 install_system_package() {
   local package="$1"
   if command -v apt-get >/dev/null 2>&1; then
-    sudo apt-get update && sudo apt-get install -y "$package"
+    run_privileged apt-get update && run_privileged apt-get install -y "$package"
   elif command -v dnf >/dev/null 2>&1; then
-    sudo dnf install -y "$package"
+    run_privileged dnf install -y "$package"
+  elif command -v yum >/dev/null 2>&1; then
+    run_privileged yum install -y "$package"
   elif command -v pacman >/dev/null 2>&1; then
-    sudo pacman -Sy --noconfirm "$package"
+    run_privileged pacman -Sy --noconfirm "$package"
   else
     return 1
   fi
+}
+
+ensure_native_build_tools() {
+  if command -v make >/dev/null 2>&1 && { command -v g++ >/dev/null 2>&1 || command -v clang++ >/dev/null 2>&1 || command -v c++ >/dev/null 2>&1; }; then
+    return 0
+  fi
+  printf 'Installing C/C++ build tools required for native modules (node-pty)...\n'
+  if command -v apt-get >/dev/null 2>&1; then
+    run_privileged apt-get update
+    run_privileged apt-get install -y build-essential python3
+  elif command -v dnf >/dev/null 2>&1; then
+    run_privileged dnf install -y gcc-c++ make python3
+  elif command -v yum >/dev/null 2>&1; then
+    run_privileged yum install -y gcc-c++ make python3
+  elif command -v pacman >/dev/null 2>&1; then
+    run_privileged pacman -Sy --noconfirm base-devel python
+  else
+    die "make and a C++ compiler are required. On Debian/Ubuntu run: apt-get install -y build-essential"
+  fi
+  command -v make >/dev/null 2>&1 || die "make is still missing after installing build tools."
 }
 
 write_env_line() {
@@ -312,6 +343,7 @@ exec "${METIS_NODE_BIN:?METIS_NODE_BIN is missing from .env}" "$@"
 EOF
 chmod 700 "$install_dir/run-service.sh"
 
+ensure_native_build_tools
 (
   unset NODE_ENV
   set -a

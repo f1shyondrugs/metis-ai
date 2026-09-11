@@ -22,6 +22,11 @@ metis_install() {
   local base script tmp
   base="${METIS_AI_INSTALL_BASE:-https://raw.githubusercontent.com/f1shyondrugs/metis-ai/master}"
   base="${base%/}"
+  # v1.0.0 platform scripts cannot compile node-pty on minimal Ubuntu (no make).
+  # Native one-liners pin INSTALL_BASE to that tag; fetch current scripts instead.
+  if [[ "$base" == "https://raw.githubusercontent.com/f1shyondrugs/metis-ai/v1.0.0" ]]; then
+    base="https://raw.githubusercontent.com/f1shyondrugs/metis-ai/master"
+  fi
   case "$(uname -s)" in
     Darwin) script="install/macos.sh" ;;
     Linux) script="install/linux.sh" ;;
