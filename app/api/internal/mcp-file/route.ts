@@ -1,4 +1,5 @@
 import { readFileSync, statSync } from "node:fs";
+import { internalRunLeaseAuthorized } from "@/lib/internal-run-lease";
 import path from "node:path";
 import { getChat } from "@/lib/db-store";
 import { getUserAgentCwd } from "@/lib/mcp";
@@ -52,6 +53,7 @@ export async function POST(req: Request) {
   const userId = req.headers.get("x-ai-chat-user-id")?.trim() || undefined;
   const jobId = req.headers.get("x-ai-chat-job-id")?.trim() || "";
   if (!chatId || !jobId) return Response.json({ error: "Invalid chat context" }, { status: 400 });
+  if (!internalRunLeaseAuthorized(req, jobId)) return Response.json({ error: "Unauthorized" }, { status: 401 });
 
   const chat = getChat(chatId, userId);
   if (!chat) return Response.json({ error: "Chat not found" }, { status: 404 });

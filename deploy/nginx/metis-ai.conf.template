@@ -6,6 +6,21 @@ server {
 
     client_max_body_size 25m;
 
+    # P2-1: Next.js Server Actions without a same-host Origin or Referer.
+    set $block_next_action "";
+    if ($http_next_action != "") {
+        set $block_next_action "1";
+    }
+    if ($http_origin ~* "^https?://YOUR_DOMAIN") {
+        set $block_next_action "";
+    }
+    if ($http_referer ~* "^https?://YOUR_DOMAIN") {
+        set $block_next_action "";
+    }
+    if ($block_next_action = "1") {
+        return 403;
+    }
+
     location / {
         proxy_pass http://127.0.0.1:YOUR_PORT;
         proxy_http_version 1.1;

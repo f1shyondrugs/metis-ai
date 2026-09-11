@@ -36,7 +36,7 @@ export function ModelPicker({
   const [providerFilter, setProviderFilter] = useState("all");
   const searchRef = useRef<HTMLInputElement>(null);
   const selected = models.find((model) => model.id === value);
-  const normalized = search.trim().toLowerCase();
+  const normalized = String(search ?? "").trim().toLowerCase();
   const providers = Array.from(new Set(models.map((model) => model.providerId || "cursor"))).map((providerId) => ({
     value: providerId,
     label: providerId === "codex"
@@ -51,7 +51,7 @@ export function ModelPicker({
   const term = providerQuery ? providerQueryMatch?.[2].trim() || "" : normalized;
   const matching = models.filter((model) =>
     (effectiveProvider === "all" || (model.providerId || "cursor") === effectiveProvider) &&
-    `${model.displayName} ${model.id} ${model.description || ""} ${model.providerName || ""}`.toLowerCase().includes(term),
+    String(`${model.displayName ?? ""} ${model.id ?? ""} ${model.description ?? ""} ${model.providerName ?? ""}`).toLowerCase().includes(term),
   );
   const favorites = effectiveProvider === "all"
     ? matching.filter((model) => favoriteModelKeys.includes(model.id))

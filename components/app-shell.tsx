@@ -418,7 +418,7 @@ function isOfficeAttachment(mimeType: string, name: string): boolean {
 }
 
 function mimeTypeFromFileName(name: string) {
-  const extension = name.split("?")[0].split("#")[0].split(".").pop()?.toLowerCase();
+  const extension = String(name ?? "").split("?")[0].split("#")[0].split(".").pop()?.toLowerCase();
   return ({
     gif: "image/gif",
     jpeg: "image/jpeg",
@@ -488,7 +488,7 @@ function truncateFileName(name: string, max = 22): string {
 }
 
 function isLegacyCodexNoiseTool(tool: Pick<ToolPart, "name" | "input" | "result" | "detail" | "todos">) {
-  const name = tool.name.trim().toLowerCase();
+  const name = String(tool.name ?? "").trim().toLowerCase();
   const emptyPayload = !tool.input && !tool.result && !tool.detail && !tool.todos?.length;
   return emptyPayload && (name === "codex error" || name === "codex todo list");
 }
@@ -891,7 +891,7 @@ async function fetchReadWithRetry(
 async function readJsonResponse<T>(response: Response): Promise<T> {
   const body = await response.text();
   const contentType = response.headers.get("content-type") || "";
-  if (!contentType.toLowerCase().includes("application/json")) {
+  if (!String(contentType ?? "").toLowerCase().includes("application/json")) {
     throw new Error(
       response.status === 404
         ? "Browser API not found. Open Metis AI through its application server, not a static frontend server."
@@ -943,7 +943,7 @@ function mergeWorkspaceItems(current: WorkspaceItem[], workspace: WorkspaceItem)
     (item) =>
       item.id === workspace.id ||
       (item.type === workspace.type &&
-        item.name.trim().toLowerCase() === workspace.name.trim().toLowerCase()),
+        String(item.name ?? "").trim().toLowerCase() === String(workspace.name ?? "").trim().toLowerCase()),
   );
   const next = [...current];
   if (index >= 0) {
@@ -5090,7 +5090,7 @@ export default function AppShell({ defaultCwd }: { defaultCwd: string }) {
     if (!authed) return;
     const onKeyDown = (event: globalThis.KeyboardEvent) => {
       const modifier = event.ctrlKey || event.metaKey;
-      const key = event.key.toLowerCase();
+      const key = String(event.key ?? "").toLowerCase();
       const target = event.target as HTMLElement | null;
       if (target?.closest("[data-browser-viewport]")) return;
  if (event.shiftKey && key === "tab") {
@@ -5377,7 +5377,7 @@ export default function AppShell({ defaultCwd }: { defaultCwd: string }) {
       enteringChatRef.current = false;
     });
     return () => window.cancelAnimationFrame(frame);
-  }, [activeChatId, paneKey, loadingChatId, messages]);
+  }, [activeChatId, paneKey, loadingChatId]);
 
   useEffect(() => {
     const el = messagesScrollRef.current;
@@ -5410,9 +5410,19 @@ export default function AppShell({ defaultCwd }: { defaultCwd: string }) {
         userScrollInput: userScrollInputRef.current,
         stickToBottom: stickToBottomRef.current,
       })) return;
+      const nextTop = pinScrollTop(el.scrollHeight, el.clientHeight);
+      if (Math.abs(el.scrollTop - nextTop) < 1) return;
       markProgrammaticScroll();
-      el.scrollTop = pinScrollTop(el.scrollHeight, el.clientHeight);
+      el.scrollTop = nextTop;
       lastMessageScrollTopRef.current = el.scrollTop;
+    };
+    let pinFrame = 0;
+    const schedulePinIfStuckToBottom = () => {
+      if (pinFrame) return;
+      pinFrame = window.requestAnimationFrame(() => {
+        pinFrame = 0;
+        pinIfStuckToBottom();
+      });
     };
     const detachFromBottom = () => {
       enteringChatRef.current = false;
@@ -5492,7 +5502,7 @@ export default function AppShell({ defaultCwd }: { defaultCwd: string }) {
     el.addEventListener("touchmove", suspendAutoScrollOnTouch, { passive: true });
     el.addEventListener("pointerdown", markPointerAsUserScroll, { passive: true });
     const inner = el.firstElementChild;
-    const observer = new ResizeObserver(pinIfStuckToBottom);
+    const observer = new ResizeObserver(schedulePinIfStuckToBottom);
     if (inner) observer.observe(inner);
     observer.observe(el);
     const frame = window.requestAnimationFrame(pinIfStuckToBottom);
@@ -5504,6 +5514,7 @@ export default function AppShell({ defaultCwd }: { defaultCwd: string }) {
       el.removeEventListener("pointerdown", markPointerAsUserScroll);
       observer.disconnect();
       window.cancelAnimationFrame(frame);
+      if (pinFrame) window.cancelAnimationFrame(pinFrame);
       if (userScrollInputTimerRef.current) window.clearTimeout(userScrollInputTimerRef.current);
     };
   }, [paneKey, loadingChatId]);
@@ -7485,7 +7496,7 @@ export default function AppShell({ defaultCwd }: { defaultCwd: string }) {
             if (activeChatIdRef.current === chatId) setAgentId(payload.agentId);
           } else if (event === "status") {
             const rawStatus = typeof payload.status === "string" ? payload.status : "";
-            const statusLabel = rawStatus.toLowerCase() === "running"
+            const statusLabel = String(rawStatus ?? "").toLowerCase() === "running"
               ? "Agent running"
               : rawStatus;
             const label = [statusLabel, typeof payload.message === "string" ? payload.message : ""]
@@ -8173,10 +8184,10 @@ export default function AppShell({ defaultCwd }: { defaultCwd: string }) {
           <Button type="button" size="xs" variant="ghost" className="h-7 shrink-0 px-2 text-xs" onClick={() => sendQueuedMessage(message)}>
             Send now
           </Button>
-          <Button type="button" size="icon-xs" variant="ghost" className="size-7 shrink-0" aria-label="Edit queued message" title="Edit queued message" onClick={() => editQueuedMessage(message)}>
+          <Button type="button" size="icon-xs" variant="ghost" className="size-7 shrink-0 max-md:min-h-11 max-md:min-w-11" aria-label="Edit queued message" title="Edit queued message" onClick={() => editQueuedMessage(message)}>
             <Pencil className="size-3.5" />
           </Button>
-          <Button type="button" size="icon-xs" variant="ghost" className="size-7 shrink-0" aria-label="Remove queued message" onClick={() => setQueuedMessages((current) => current.filter((item) => item.id !== message.id))}>
+          <Button type="button" size="icon-xs" variant="ghost" className="size-7 shrink-0 max-md:min-h-11 max-md:min-w-11" aria-label="Remove queued message" onClick={() => setQueuedMessages((current) => current.filter((item) => item.id !== message.id))}>
             <X className="size-3.5" />
           </Button>
         </div>

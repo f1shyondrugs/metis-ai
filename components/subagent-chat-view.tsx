@@ -136,7 +136,7 @@ export function SubagentChatView({ tool, onBack, onCancel, cancelling = false, s
       aria-label="Subagent chat"
     >
       <header className="flex h-12 shrink-0 items-center gap-2 border-b border-border/55 bg-background px-3 md:px-4">
-        <Button type="button" variant="ghost" size="icon" className="size-8" onClick={requestClose} aria-label="Back to chat" title="Back to chat">
+        <Button type="button" variant="ghost" size="icon" className="size-8 max-md:min-h-11 max-md:min-w-11" onClick={requestClose} aria-label="Back to chat" title="Back to chat">
           <ArrowLeft className="size-4" />
         </Button>
         <p className="min-w-0 flex-1 truncate text-sm font-medium text-foreground" title={title}>{title}</p>
@@ -199,7 +199,7 @@ export function SubagentChatView({ tool, onBack, onCancel, cancelling = false, s
                     : "text-[15px] leading-relaxed text-foreground/95",
                 )}
               >
-                {block.role.toLowerCase().includes("assistant") ? (
+                {String(block.role ?? "").toLowerCase().includes("assistant") ? (
                   <div className="block w-full">
                     <Markdown content={block.text} />
                   </div>

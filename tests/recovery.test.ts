@@ -198,14 +198,25 @@ test("interactive jobs outrank background jobs and reserved slots skip backgroun
     workload: "background",
     priority: 10,
   });
+  const heavy = enqueueJob({
+    chatId: createChat("Interactive heavy priority").id,
+    message: "heavy",
+    parentJobId: "parent-job",
+    modeId: "browser-use",
+  });
   const interactive = enqueueJob({
     chatId: createChat("Interactive priority").id,
     message: "interactive",
     workload: "interactive",
     priority: 100,
   });
+  assert.equal(heavy.priority, 60);
+  assert.equal(interactive.priority, 100);
   assert.equal(claimNextJob({ interactiveOnly: true })?.id, interactive.id);
   updateJob(interactive.id, { status: "completed" });
+  assert.equal(claimNextJob({ interactiveOnly: true }), null);
+  assert.equal(claimNextJob()?.id, heavy.id);
+  updateJob(heavy.id, { status: "completed" });
   assert.equal(claimNextJob()?.id, background.id);
   updateJob(background.id, { status: "completed" });
 });

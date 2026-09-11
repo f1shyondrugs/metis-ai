@@ -76,7 +76,9 @@ test("opening a chat pins the transcript to the bottom and does not page history
   assert.doesNotMatch(shell, /if \(!loadingChatId\) enteringChatRef\.current = false/);
   assert.match(shell, /layoutResetToTop/);
   assert.match(shell, /if \(el\.scrollTop < 80\) void loadEarlierMessagesRef\.current\(\)/);
-  assert.match(shell, /new ResizeObserver\(pinIfStuckToBottom\)/);
+  assert.match(shell, /new ResizeObserver\(schedulePinIfStuckToBottom\)/);
+  assert.match(shell, /}, \[activeChatId, paneKey, loadingChatId\]\)/);
+  assert.doesNotMatch(shell, /}, \[activeChatId, paneKey, loadingChatId, messages\]\)/);
   assert.match(shell, /if \(enteringChatRef\.current\) return/);
 });
 

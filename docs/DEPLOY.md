@@ -62,5 +62,5 @@ systemd unit or Nginx file unchanged to another machine.
 
 Live units (`metis-ai`, `metis-ai-worker`, `metis-ai-mcp`) must **not** be
 stopped as a side effect of a test or docs change. Restart only on explicit
-operator request. cgroup `MemoryMax` / `TasksMax` were missing at audit time
-(P1-5).
+operator request. P1-5 cgroup limits are live since 11 Sep 2026 16:33 CEST:
+app 2G/512, worker 6G/1024, mcp 1G/256.

@@ -23,13 +23,15 @@ Stale `running` jobs are reaped with a **15-minute cutoff** and lease-based
 `reapExpiredJobLeases` (BUG-C5). Do not reintroduce “requeue every running job”.
 
 One interactive slot is reserved so heavy browser/MCP jobs cannot take the
-whole pool (BUG-C3 partial). There are still no priority classes.
+whole pool. Jobs use priority classes: interactive `100`, interactive-heavy `60`
+(parent/subagent or browser-ish mode), background `10`. The reserved slot skips
+heavy and background work (BUG-C3).
 
 `reconcileSubagentParent` appends the lifecycle-review message with
 `appendMessageInTransaction` inside the enqueue transaction. `transaction()`
 nests with SAVEPOINT so a nested writer cannot fatal-exit the worker.
 ## Resource limits
 
-Units `metis-ai`, `metis-ai-worker`, and `metis-ai-mcp` had no `MemoryMax` /
-`TasksMax` at audit time (P1-5). Adding cgroup limits is a deploy change;
-apply only with an explicit restart approval.
+Units `metis-ai` (2G/512), `metis-ai-worker` (6G/1024), and `metis-ai-mcp`
+(1G/256) have `MemoryMax` / `TasksMax` (P1-5). Live since the 11 Sep 2026
+16:33 CEST restart.

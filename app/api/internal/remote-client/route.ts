@@ -1,4 +1,5 @@
 import { collectRemoteClientEvents, requestRemoteClient } from "@/lib/remote-client-gateway";
+import { internalRunLeaseAuthorized } from "@/lib/internal-run-lease";
 import { listRemoteClients } from "@/lib/remote-clients";
 import { bearerTokenMatches } from "@/lib/security";
 
@@ -9,6 +10,8 @@ export async function POST(req: Request) {
   if (!bearerTokenMatches(req, process.env.MCP_BEARER_TOKEN)) {
     return Response.json({ error: "Unauthorized" }, { status: 401 });
   }
+  const jobId = req.headers.get("x-ai-chat-job-id")?.trim() || "";
+  if (jobId && !internalRunLeaseAuthorized(req, jobId)) return Response.json({ error: "Unauthorized" }, { status: 401 });
   const ownerId = req.headers.get("x-ai-chat-user-id")?.trim() || "";
   if (!ownerId) return Response.json({ error: "Account context is required" }, { status: 400 });
   const body = (await req.json().catch(() => ({}))) as {

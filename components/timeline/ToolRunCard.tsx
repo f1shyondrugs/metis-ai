@@ -34,7 +34,7 @@ function formatDuration(startedAt: string, completedAt?: string): string | null 
 
 function inferredKind(tool: TimelineToolItem) {
   if (tool.toolKind) return tool.toolKind;
-  const name = tool.name.toLowerCase();
+  const name = String(tool.name ?? "").toLowerCase();
   if (/canvas/.test(name)) return "canvas";
   if (/plan|todo/.test(name)) return "plan";
   if (/browser|web_|navigate|search_web/.test(name)) return "browser";

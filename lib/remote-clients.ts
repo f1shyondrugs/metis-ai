@@ -1,6 +1,7 @@
 import { createHash, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
 import { getDatabase, isSqliteBusyError, transaction } from "@/lib/sqlite";
 import { normalizePermissionMode, validateUserRemoteRequest, type RemotePermissionMode } from "@/lib/remote-security";
+import { redactSensitiveData } from "@/lib/agent-trace";
 
 export type RemotePolicyMode = "restricted" | "approval_required" | "full_access";
 export type RemoteClientStatus = "online" | "offline" | "revoked";
@@ -437,13 +438,7 @@ export function appendRemoteAudit(input: Omit<RemoteAuditEntry, "id" | "createdA
 }
 
 function redactRemoteData(params?: Record<string, unknown>) {
-  if (!params) return {};
-  return Object.fromEntries(Object.entries(params).map(([key, value]) => [
-    key,
-    /secret|token|password|credential/i.test(key)
-      ? "[redacted]"
-      : typeof value === "string" ? value.slice(0, 2_000) : value,
-  ]));
+  return redactSensitiveData(params || {}, 2_000) as Record<string, unknown>;
 }
 
 export function listRemoteAudit(ownerId: string, clientId?: string) {

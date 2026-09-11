@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { internalRunLeaseAuthorized } from "@/lib/internal-run-lease";
 import { appendMessage, createChat, getChat, getGlobalModelSettings, updateChat } from "@/lib/db-store";
 import { cancelChildJobs, enqueueJob, getJob, listChildJobs, updateJob } from "@/lib/db-jobs";
 import { bearerTokenMatches } from "@/lib/security";
@@ -48,6 +49,7 @@ export async function POST(req: Request) {
   if (!parentJob || !parentChat || parentJob.chatId !== parentChatId) {
     return Response.json({ error: "Invalid parent agent context" }, { status: 400 });
   }
+  if (!internalRunLeaseAuthorized(req, parentJobId)) return Response.json({ error: "Unauthorized" }, { status: 401 });
   if (!ACTIVE.has(parentJob.status)) {
     return Response.json({ error: "The parent agent is no longer active." }, { status: 409 });
   }

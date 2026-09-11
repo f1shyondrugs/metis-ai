@@ -1,4 +1,5 @@
 import { getAuthenticatedUserId } from "@/lib/auth";
+import { internalRunLeaseAuthorized } from "@/lib/internal-run-lease";
 import {
   createAutomation,
   deleteAutomation,
@@ -35,6 +36,8 @@ export async function POST(req: Request) {
   if (!bearerTokenMatches(req, process.env.MCP_BEARER_TOKEN)) {
     return Response.json({ error: "Unauthorized" }, { status: 401 });
   }
+  const jobId = req.headers.get("x-ai-chat-job-id")?.trim() || "";
+  if (jobId && !internalRunLeaseAuthorized(req, jobId)) return Response.json({ error: "Unauthorized" }, { status: 401 });
   const ownerId = req.headers.get("x-ai-chat-user-id")?.trim() || await getAuthenticatedUserId(req);
   if (!ownerId) return Response.json({ error: "Account context is required" }, { status: 401 });
   const body = (await req.json().catch(() => ({}))) as Record<string, unknown>;

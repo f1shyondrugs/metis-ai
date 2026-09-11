@@ -83,7 +83,7 @@ function highlightMatches(text: string, query: string): ReactNode {
   if (!normalized) return text;
   const pattern = new RegExp(`(${normalized.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")})`, "gi");
   return text.split(pattern).map((part, index) =>
-    part.toLowerCase() === normalized.toLowerCase() ? (
+    String(part ?? "").toLowerCase() === String(normalized ?? "").toLowerCase() ? (
       <mark key={`${part}-${index}`} className="rounded bg-primary/20 px-0.5 text-primary">
         {part}
       </mark>
@@ -117,9 +117,9 @@ export function CommandPalette({
   const [activeIndex, setActiveIndex] = useState(0);
 
   const filteredCommands = useMemo(() => {
-    const normalized = query.trim().toLowerCase();
+    const normalized = String(query ?? "").trim().toLowerCase();
     if (!normalized) return commandItems;
-    return commandItems.filter((item) => item.label.toLowerCase().includes(normalized));
+    return commandItems.filter((item) => String(item.label ?? "").toLowerCase().includes(normalized));
   }, [query]);
   const commandCount = filteredCommands.length;
 
@@ -272,7 +272,7 @@ export function CommandPalette({
             type="button"
             variant="ghost"
             size="icon-sm"
-            className="group size-7 shrink-0"
+            className="group size-7 shrink-0 max-md:min-h-11 max-md:min-w-11"
             onClick={() => onOpenChange(false)}
             aria-label="Close search"
             title="Close search"

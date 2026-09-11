@@ -1,4 +1,5 @@
 import { appendRunEvent, getJob, updateJob } from "@/lib/db-jobs";
+import { internalRunLeaseAuthorized } from "@/lib/internal-run-lease";
 import {
   createPendingQuestion,
   getPendingQuestion,
@@ -31,6 +32,7 @@ export async function POST(req: Request) {
   }
   const chat = chatId ? getChat(chatId, userId) : null;
   if (!chat || !jobId) return Response.json({ error: "Invalid chat context" }, { status: 400 });
+  if (!internalRunLeaseAuthorized(req, jobId)) return Response.json({ error: "Unauthorized" }, { status: 401 });
 
   const body = (await req.json().catch(() => ({}))) as { questions?: unknown };
   const rawQuestions = Array.isArray(body.questions) ? body.questions : [];

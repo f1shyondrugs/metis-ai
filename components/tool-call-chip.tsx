@@ -237,7 +237,7 @@ function automationInfo(name: string, input?: string, result?: string, detail?: 
 }
 
 function isAutomationCardTool(tool: ToolCallData) {
-  if (["running", "in_progress", "pending", "started", "executing", "queued"].includes(tool.status.toLowerCase())) {
+  if (["running", "in_progress", "pending", "started", "executing", "queued"].includes(String(tool.status ?? "").toLowerCase())) {
     return false;
   }
   return Boolean(automationInfo(tool.name, tool.input, tool.result, tool.detail));
@@ -317,8 +317,8 @@ function toolDisplayInfo(kind: ToolCallData["kind"], name: string, input?: strin
 
 function isSameCompactText(left?: string, right?: string) {
   if (!left || !right) return false;
-  const a = left.replace(/\s+/g, " ").trim().toLowerCase();
-  const b = right.replace(/\s+/g, " ").trim().replace(/…$/u, "").trim().toLowerCase();
+  const a = String(left ?? "").replace(/\s+/g, " ").trim().toLowerCase();
+  const b = String(right ?? "").replace(/\s+/g, " ").trim().replace(/…$/u, "").trim().toLowerCase();
   if (!a || !b) return false;
   return a === b || a.startsWith(b) || b.startsWith(a);
 }
@@ -380,7 +380,7 @@ export const ToolCallChip = memo(function ToolCallChip({
             </div>
             <div className="mt-1.5 h-1 overflow-hidden rounded-full bg-muted/70"><div className="h-full rounded-full bg-blue-400/75 transition-[width]" style={{ width: `${percent}%` }} /></div>
           </div>
-          {onOpenRaw ? <button type="button" className="flex size-6 shrink-0 items-center justify-center rounded-md text-muted-foreground/45 hover:bg-muted hover:text-foreground" aria-label="Show raw tool information" onClick={onOpenRaw}><Code2 className="size-3" /></button> : null}
+          {onOpenRaw ? <button type="button" className="flex size-6 shrink-0 items-center justify-center rounded-md max-md:min-h-11 max-md:min-w-11 text-muted-foreground/45 hover:bg-muted hover:text-foreground" aria-label="Show raw tool information" onClick={onOpenRaw}><Code2 className="size-3" /></button> : null}
         </div>
         <div className="border-t border-border/30 px-3 py-2">
           <div className="space-y-1.5">

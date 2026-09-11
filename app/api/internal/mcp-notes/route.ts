@@ -1,4 +1,5 @@
 import { getChat, getGlobalModelSettings } from "@/lib/db-store";
+import { internalRunLeaseAuthorized } from "@/lib/internal-run-lease";
 import { bearerTokenMatches } from "@/lib/security";
 import { featureFlags } from "@/lib/feature-flags";
 import {
@@ -30,6 +31,7 @@ export async function POST(req: Request) {
   const jobId = req.headers.get("x-ai-chat-job-id")?.trim() || "";
   const chat = chatId ? getChat(chatId, userId) : null;
   if (!chat || !jobId) return Response.json({ error: "Invalid chat context" }, { status: 400 });
+  if (!internalRunLeaseAuthorized(req, jobId)) return Response.json({ error: "Unauthorized" }, { status: 401 });
   if (!featureFlags(getGlobalModelSettings(userId)).notes) return Response.json({ error: "Notes are disabled" }, { status: 404 });
   const body = (await req.json().catch(() => ({}))) as Record<string, unknown>;
   const action = body.action === "search" ? "search" : body.action === "create" ? "create" : body.action === "update" ? "update" : "list";

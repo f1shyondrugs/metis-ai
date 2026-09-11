@@ -1,4 +1,5 @@
 import { runAgentTimedWait } from "@/lib/agent-wait";
+import { internalRunLeaseAuthorized } from "@/lib/internal-run-lease";
 import { getJob, listChildJobs, listRunEvents } from "@/lib/db-jobs";
 import { getChat } from "@/lib/db-store";
 import { bearerTokenMatches } from "@/lib/security";
@@ -85,6 +86,9 @@ export async function POST(req: Request) {
   const chatId = req.headers.get("x-ai-chat-id")?.trim() || "";
   const userId = req.headers.get("x-ai-chat-user-id")?.trim() || undefined;
   const jobId = req.headers.get("x-ai-chat-job-id")?.trim() || "";
+  if (jobId && !internalRunLeaseAuthorized(req, jobId)) {
+    return Response.json({ error: "Unauthorized" }, { status: 401 });
+  }
   if (!chatId || !jobId || !getChat(chatId, userId)) {
     return Response.json({ error: "Invalid chat context" }, { status: 400 });
   }

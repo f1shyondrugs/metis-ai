@@ -1330,9 +1330,9 @@ export function SettingsPanel({
   }
 
   const filteredBrowserStorage = browserStorage.filter((item) => {
-   const query = browserStorageQuery.trim().toLowerCase();
+   const query = String(browserStorageQuery ?? "").trim().toLowerCase();
    if (!query) return true;
-   return item.origin.toLowerCase().includes(query) || item.storageTypes.some((type) => type.toLowerCase().includes(query));
+   return String(item.origin ?? "").toLowerCase().includes(query) || item.storageTypes.some((type) => String(type ?? "").toLowerCase().includes(query));
   });
 
   const selectableProviders = providerDefinitions;
@@ -2438,7 +2438,7 @@ export function SettingsPanel({
                     <div key={client.id} className="rounded-lg border bg-card/40 p-3">
                       <div className="flex flex-wrap items-center justify-between gap-3">
                         <div className="flex min-w-0 items-start gap-2">
-                          {client.os?.toLowerCase().includes("win") ? <MicrosoftLogo className="mt-1 size-4 shrink-0 text-muted-foreground" /> : client.os?.toLowerCase().includes("mac") ? <AppleLogo className="mt-1 size-4 shrink-0 text-muted-foreground" /> : <Server className="mt-1 size-4 shrink-0 text-muted-foreground" />}
+                          {String(client.os ?? "").toLowerCase().includes("win") ? <MicrosoftLogo className="mt-1 size-4 shrink-0 text-muted-foreground" /> : String(client.os ?? "").toLowerCase().includes("mac") ? <AppleLogo className="mt-1 size-4 shrink-0 text-muted-foreground" /> : <Server className="mt-1 size-4 shrink-0 text-muted-foreground" />}
                           <div className="min-w-0">
                           <Input
                            key={`${client.id}:${client.name}`}
@@ -2467,7 +2467,7 @@ export function SettingsPanel({
                         <div className="flex items-center gap-1">
                           <span className={`size-2 rounded-full ${client.status === "online" ? "bg-emerald-500" : "bg-muted-foreground/40"}`} title={client.status} />
                           <DropdownMenu>
-                            <DropdownMenuTrigger asChild><Button type="button" size="icon-xs" variant="ghost" aria-label={`Manage ${client.name}`}><MoreHorizontal className="size-4" /></Button></DropdownMenuTrigger>
+                            <DropdownMenuTrigger asChild><Button type="button" size="icon-xs" variant="ghost" className="max-md:min-h-11 max-md:min-w-11" aria-label={`Manage ${client.name}`}><MoreHorizontal className="size-4" /></Button></DropdownMenuTrigger>
                             <DropdownMenuContent align="end">
                               <DropdownMenuItem onClick={() => void testRemoteConnection(client)}>Test connection</DropdownMenuItem>
                               <DropdownMenuItem onClick={() => void updateRemotePolicy(client, client.policy.mode === "full_access" ? "restricted" : "full_access")}>

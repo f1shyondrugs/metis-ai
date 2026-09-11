@@ -21,7 +21,7 @@ export type AgentJob = {
   userId?: string;
   /** Higher values run first. Interactive chats default above background work. */
   priority?: number;
-  workload?: "interactive" | "background";
+  workload?: "interactive" | "interactive-heavy" | "background";
   incognito?: boolean;
   message: string;
   messageId?: string;

@@ -182,11 +182,17 @@ function enqueueJobInTransaction(
     const now = iso();
     const background =
       input.workload === "background" || Boolean(input.automationId);
+    const interactiveHeavy = !background && (
+      Boolean(input.parentJobId) ||
+      /(?:browser|web)/i.test(input.modeId || "")
+    );
     const priority = Number.isFinite(input.priority)
       ? Math.max(0, Math.min(100, Math.floor(input.priority as number)))
       : background
         ? 10
-        : 100;
+        : interactiveHeavy
+          ? 60
+          : 100;
     const maxWorkers = parseWorkerConcurrency(
       process.env.AI_CHAT_WORKER_CONCURRENCY,
     );
@@ -207,7 +213,7 @@ function enqueueJobInTransaction(
     const job: AgentJob = {
       ...input,
       priority,
-      workload: background ? "background" : "interactive",
+      workload: background ? "background" : interactiveHeavy ? "interactive-heavy" : "interactive",
       ...(queueMessage ? { queueMessage } : {}),
       id: randomUUID(),
       status: "queued",
@@ -394,10 +400,21 @@ export function claimNextJob(
        WHERE status = 'queued'
          AND (
            ? = 0
-           OR COALESCE(
-             CASE WHEN json_valid(data) THEN CAST(json_extract(data, '$.priority') AS INTEGER) END,
-             100
-           ) >= 50
+           OR (
+             COALESCE(
+               CASE WHEN json_valid(data) THEN CAST(json_extract(data, '$.priority') AS INTEGER) END,
+               100
+             ) >= 50
+             AND NOT (
+               json_valid(data)
+               AND (
+                 json_extract(data, '$.workload') = 'interactive-heavy'
+                 OR (json_extract(data, '$.parentJobId') IS NOT NULL AND json_extract(data, '$.parentJobId') != '')
+                 OR lower(COALESCE(json_extract(data, '$.modeId'), '')) LIKE '%browser%'
+                 OR lower(COALESCE(json_extract(data, '$.modeId'), '')) LIKE '%web%'
+               )
+             )
+           )
          )
          AND (
            (
