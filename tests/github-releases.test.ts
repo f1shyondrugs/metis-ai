@@ -111,7 +111,11 @@ test("commit channel installed label uses the SHA, not package version", () => {
 test("commit channel is current when git HEAD matches latest even if the slot manifest is stale", async () => {
   const root = await mkdtemp(`${os.tmpdir()}/metis-update-head-`);
   const previousDistDir = process.env.NEXT_DIST_DIR;
+  const previousGithubSha = process.env.GITHUB_SHA;
+  const previousReleaseCommit = process.env.METIS_RELEASE_COMMIT;
   try {
+    delete process.env.GITHUB_SHA;
+    delete process.env.METIS_RELEASE_COMMIT;
     await execFileAsync("git", ["init"], { cwd: root });
     await execFileAsync("git", ["config", "user.email", "test@example.com"], { cwd: root });
     await execFileAsync("git", ["config", "user.name", "test"], { cwd: root });
@@ -136,6 +140,10 @@ test("commit channel is current when git HEAD matches latest even if the slot ma
   } finally {
     if (previousDistDir === undefined) delete process.env.NEXT_DIST_DIR;
     else process.env.NEXT_DIST_DIR = previousDistDir;
+    if (previousGithubSha === undefined) delete process.env.GITHUB_SHA;
+    else process.env.GITHUB_SHA = previousGithubSha;
+    if (previousReleaseCommit === undefined) delete process.env.METIS_RELEASE_COMMIT;
+    else process.env.METIS_RELEASE_COMMIT = previousReleaseCommit;
     await rm(root, { recursive: true, force: true });
   }
 });
