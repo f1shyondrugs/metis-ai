@@ -1,7 +1,9 @@
 # Metis AI – priorisierter Modernisierungsplan
 
+> **Status:** Snapshot **21 Aug 2026**. Reihenfolge weiter nützlich; Live-P0/P1 stehen in [PRODUCTION-AUDIT.md](./PRODUCTION-AUDIT.md).
+
 **Stand:** 2026-08-21  
-**Basis:** `METIS_ARCHITECTURE_AUDIT.md`  
+**Basis:** [METIS_ARCHITECTURE_AUDIT.md](./METIS_ARCHITECTURE_AUDIT.md)  
 **Prinzip:** Kein Big Bang. Jede Stufe ist rückwärtskompatibel, messbar, durch Feature Flags abschaltbar und besitzt einen Rollback-Pfad.
 
 ## 1. Verbindliche Arbeitsregeln

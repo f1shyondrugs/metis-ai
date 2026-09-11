@@ -1,5 +1,7 @@
 # Metis AI Final Stability Report
 
+> **Status:** Snapshot **20 Aug 2026** (what that wave shipped). Current open issues: [PRODUCTION-AUDIT.md](./PRODUCTION-AUDIT.md).
+
 Date: August 20, 2026
 
 ## Fixed Bugs

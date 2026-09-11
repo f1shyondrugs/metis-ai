@@ -1,5 +1,7 @@
 # Metis AI – vollständiger Architektur- und Sicherheits-Audit
 
+> **Status:** Snapshot **21 Aug 2026**. Keine Live-Bugliste. Offene Punkte und Fixes danach: [PRODUCTION-AUDIT.md](./PRODUCTION-AUDIT.md) und [BUG_PRIORITY.md](./BUG_PRIORITY.md).
+
 **Stand:** 2026-08-21  
 **Repository:** `/home/samuel/metis-ai`  
 **Branch / Commit:** `stable/overall` / `5380da79244247a033dde1cc95585ab2ff735189`  
@@ -563,7 +565,7 @@ Der Build darf daher nicht als bestanden oder fehlgeschlagen bewertet werden. De
 
 Metis muss nicht neu erfunden werden. Queue, Kindprozess-Isolation, MCP-Brücke, Browser-Guard, Message-Idempotenz und bestehende Tests sind brauchbare Assets. Die Plattform wird professionell, wenn Sicherheit und Orchestrierung explizit werden: echte Approval-Receipts, kleine Capabilities, disposable Executor, eine Run-State-Machine, durable Events, kanonische Provideradapter und messbare Release-/Last-Gates.
 
-Die verbindliche Reihenfolge steht in `METIS_MODERNIZATION_PLAN.md`.
+Die verbindliche Reihenfolge steht in [METIS_MODERNIZATION_PLAN.md](./METIS_MODERNIZATION_PLAN.md). Live-P0/P1: [PRODUCTION-AUDIT.md](./PRODUCTION-AUDIT.md).
 
 ### Iteration 2 evidence
 

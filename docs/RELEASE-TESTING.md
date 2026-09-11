@@ -1,5 +1,7 @@
 # Release- und Upgrade-Tests
 
+> Last reviewed: 11 Sep 2026. Index: [README.md](./README.md).
+
 ## Lokale, netzwerkfreie Vertragsprüfung
 
 Diese Prüfung verändert keine Installation und veröffentlicht nichts:

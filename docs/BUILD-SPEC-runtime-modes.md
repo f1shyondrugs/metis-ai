@@ -1,6 +1,6 @@
 # BUILD SPEC — Phase 1: Runtime Modes + Approval Flow (t3-Port)
 
-> Parent plan: `docs/PORT-PLAN-t3-architecture.md`. Quelle t3code (MIT): `github.com/pingdotgg/t3code`.
+> Parent plan: [`PORT-PLAN-t3-architecture.md`](./PORT-PLAN-t3-architecture.md). Quelle t3code (MIT): `github.com/pingdotgg/t3code`.
 > Ziel: 4-stufige RuntimeModes pro Chat, gemappt auf alle 3 Provider-Paths (Codex-SDK, Claude-SDK, AI-SDK/GLM), plus interaktiver Approval-Flow im Claude- und GLM-Pfad.
 > Repo: `/home/samuel/metis-ai`, Branch: `stable/overall` (darauf aufbauen, neuer Feature-Branch `feat/runtime-modes`).
 

@@ -8,7 +8,8 @@ especially when they include tests or clear reproduction steps.
 1. Check existing issues and pull requests.
 2. For larger changes, open an issue first so the direction can be discussed.
 3. Read [`SECURITY.md`](./SECURITY.md) before reporting a security concern.
-4. Never include `.env`, credentials, API keys, databases or runtime state in a
+4. Read [`docs/README.md`](./docs/README.md). Architecture and operator notes live under `docs/`.
+5. Never include `.env`, credentials, API keys, databases or runtime state in a
    commit.
 
 ## Local setup

@@ -1,5 +1,7 @@
 # T3-Code-Architektur-Port: Plan & Analyse (2026-08-25)
 
+> **Status:** Snapshot 25 Aug 2026. Teile (Runtime-Modes) sind danach gelandet; das ist kein Live-Bugtracker. Offene Produktionsthemen: [PRODUCTION-AUDIT.md](./PRODUCTION-AUDIT.md).
+
 > Quelle: github.com/pingdotgg/t3code (MIT-Lizenz, Theo Browne). Lokaler Clone: `/home/samuel/t3code`.
 > Ziel: Metis' größte Schwachstellen (anfällige Provider-Paths, kein echtes Approval-Gating, kein Plan-Mode-Enforcement, kein Checkpointing) durch t3's bewährte Architektur ersetzen.
 

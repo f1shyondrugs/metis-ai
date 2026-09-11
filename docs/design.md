@@ -1,5 +1,7 @@
 # Metis Glassmorphism Design Direction
 
+> **Status (11 Sep 2026): superseded.** Glass, glow, and `hsl(var(` are **not** the live UI target. Keep this file as historical context. Current product UI follows the in-app design-director / no-glass rules. Open engineering issues: [PRODUCTION-AUDIT.md](./PRODUCTION-AUDIT.md).
+
 ## Goal
 
 Integrate a restrained glassmorphism layer into the existing Metis interface. Preserve the current information architecture, layout, spacing, accessibility, and interaction patterns. This is a visual refinement, not a redesign of the product structure.

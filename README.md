@@ -12,6 +12,8 @@ MCP servers — brought together in one self-hosted application.
   ·
   <a href="./CONTRIBUTING.md">Contributing</a>
   ·
+  <a href="./docs/README.md">Docs</a>
+  ·
   <a href="https://youtu.be/UhJVr7-CeOY">Tutorial & Introduction</a>
 </p>
 
@@ -291,8 +293,8 @@ For a trusted deployment:
    their permissions.
 5. Treat shell, filesystem, Docker and service-control tools as privileged.
 
-See [`SECURITY.md`](./SECURITY.md) and the gateway
-[`README.md`](./packages/mcp-gateway/README.md) before exposing any endpoint.
+See [`SECURITY.md`](./SECURITY.md), [`docs/PRODUCTION-AUDIT.md`](./docs/PRODUCTION-AUDIT.md),
+and the gateway [`README.md`](./packages/mcp-gateway/README.md) before exposing any endpoint.
 
 <p align="center">
   <img src="./public/configuration.png" alt="Configuration" width="100%">
@@ -339,12 +341,15 @@ project's contribution expectations are documented in
 ```text
 app/                  Next.js routes, pages and API handlers
 components/           React UI and workspace panels
+docs/                 Project documentation (start at docs/README.md)
 lib/                  Agent runtime, providers, storage and MCP internals
 packages/mcp-gateway/ Public MCP gateway module boundary
 scripts/              Security and maintenance checks
 tests/                Provider-focused tests
 public/               Static assets and prompt data
 ```
+
+Operator and architecture notes, including the current production audit, live in [`docs/`](./docs/README.md).
 
 <p align="center">
   <img src="./public/security.png" alt="Security" width="100%">

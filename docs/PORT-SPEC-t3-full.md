@@ -1,5 +1,7 @@
 # T3-Port Vollarchitektur — Master Spec (2026-08-27)
 
+> **Status:** Snapshot 27 Aug 2026. Phase-1-Hinweis im Dokument nicht als aktuellen Git-Stand lesen. Live-Issues: [PRODUCTION-AUDIT.md](./PRODUCTION-AUDIT.md).
+
 Ziel: Metis' Agent-Stack wird architektonisch zu t3 Code portiert — **mit unserer UI und unseren Features**.
 Referenz-Clone: `/home/samuel/t3code` (MIT). Nur lesen, nie ändern.
 

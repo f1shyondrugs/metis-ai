@@ -1,5 +1,7 @@
 # Remote-Client: Berechtigungsmodell
 
+> Last reviewed: 11 Sep 2026. Related: [SECURITY.md](../SECURITY.md), [PRODUCTION-AUDIT.md](./PRODUCTION-AUDIT.md).
+
 ## Modi
 
 - **Benutzerzugriff (Standard):** Per-User-Installation, nur Benutzerdateien, Benutzerprozesse und explizit erlaubte Benutzerverzeichnisse. Systemdateien, andere Profile, Dienste, Datenträger und administrative Befehle werden lokal und serverseitig abgewiesen.

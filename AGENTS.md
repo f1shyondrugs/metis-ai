@@ -1,5 +1,9 @@
 # Metis Agent Rules
 
+Project documentation is under [`docs/README.md`](./docs/README.md). Current
+open production issues: [`docs/PRODUCTION-AUDIT.md`](./docs/PRODUCTION-AUDIT.md).
+Do not stop live Metis systemd units as a side effect of a test.
+
 ## Provider And Model Contract
 
 - Never hardcode a model, provider capability, context window, parameter value,
