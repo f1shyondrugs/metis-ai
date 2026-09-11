@@ -151,6 +151,7 @@ import {
   readClientChatSnapshot,
   writeClientChatSnapshot,
 } from "@/lib/client-chat-cache";
+import { CHAT_LIST_POLL_ACTIVE_MS, CHAT_LIST_POLL_IDLE_MS } from "@/lib/chat-list-poll";
 import {
   installGlobalClientTelemetry,
   reportClientError,
@@ -4941,9 +4942,15 @@ export default function AppShell({ defaultCwd }: { defaultCwd: string }) {
 
   useEffect(() => {
     if (!authed) return;
-    const interval = window.setInterval(() => void loadChats(), 10000);
+    const hasActiveRun = chats.some((chat) =>
+      ["running", "waiting_input", "waiting_for_user"].includes(chat.runStatus || ""),
+    );
+    const interval = window.setInterval(() => {
+      if (document.visibilityState === "hidden") return;
+      void loadChats();
+    }, hasActiveRun ? CHAT_LIST_POLL_ACTIVE_MS : CHAT_LIST_POLL_IDLE_MS);
     return () => window.clearInterval(interval);
-  }, [authed, loadChats]);
+  }, [authed, chats, loadChats]);
 
   useEffect(() => {
     const openLinkedUrl = (event: Event) => {

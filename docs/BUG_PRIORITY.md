@@ -8,7 +8,6 @@ None in git. P0-1/2/3 are patched; they go live on the next approved deploy (no 
 
 ## High (open)
 
-- Full-JSON chat checkpoints every 1.5 s and list queries over every blob (P1-3).
 - Production `toLowerCase` TypeError and React #185 on long chats (P1-4).
 - systemd units have no cgroup memory/CPU/task limits (P1-5; restart required).
 - Heavy jobs still share the pool; only one reserved interactive slot (BUG-C3 partial).
@@ -30,6 +29,7 @@ None in git. P0-1/2/3 are patched; they go live on the next approved deploy (no 
 - Legacy `x-chat-password` impersonation path (SEC-03 / P1-2).
 - Incognito filter no-op in list SQL (SEC-08 / P1-6).
 - `/api/runs` orphan attachments on 409 (P2-4).
+- Full-JSON chat checkpoints and 14× `json_extract` list SQL (P1-3).
 - MCP bearer accepted caller-supplied user/chat/job headers (BUG-C1).
 - `call_mcp_tool` skipped child-tool policy (BUG-C2).
 - Browser WebSocket setup unhandled rejection (BUG-C4).

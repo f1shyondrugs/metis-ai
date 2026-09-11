@@ -1,10 +1,12 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import { rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
 import test, { after, before } from "node:test";
 import { requestClientAddress } from "../lib/rate-limit";
+import { CHAT_LIST_POLL_ACTIVE_MS, CHAT_LIST_POLL_IDLE_MS } from "../lib/chat-list-poll";
 
 const dataDir = path.join(os.tmpdir(), `metis-prod-audit-${randomUUID()}`);
 process.env.CHAT_DATA_DIR = dataDir;
@@ -78,4 +80,59 @@ test("requestClientAddress prefers x-real-ip and otherwise the last XFF hop", ()
     headers: { "x-forwarded-for": "8.8.8.8, 10.1.1.1" },
   });
   assert.equal(requestClientAddress(lastHop), "10.1.1.1");
+});
+
+test("listChatsForUser reads chat_list instead of json_extract on chats.data", () => {
+  const src = readFileSync(path.join(import.meta.dirname, "../lib/db-store.ts"), "utf8");
+  const start = src.indexOf("export function listChatsForUser");
+  const end = src.indexOf("export type ChatSearchResult");
+  const fn = src.slice(start, end);
+  assert.match(fn, /FROM chat_list/);
+  assert.equal(/json_extract\(data/.test(fn), false);
+  const { getDatabase } = modules[1];
+  const plan = getDatabase()
+    .prepare(
+      `EXPLAIN QUERY PLAN
+       SELECT id FROM chat_list
+       WHERE owner_id = ? AND incognito = 0 AND (automation_run_id IS NULL OR automation_run_id = '') AND archived = 0`,
+    )
+    .all("owner-x") as Array<{ detail?: string }>;
+  const details = plan.map((row) => row.detail || "").join("\n");
+  assert.match(details, /chat_list/);
+});
+
+test("archived chats stay out of the default list", () => {
+  const { createChat, listChatsForUser, updateChat } = modules[0];
+  const open = createChat("Open");
+  const archived = createChat("Archived");
+  updateChat(archived.id, { archived: true });
+  const listed = listChatsForUser();
+  assert.equal(listed.some((chat) => chat.id === open.id), true);
+  assert.equal(listed.some((chat) => chat.id === archived.id), false);
+  assert.equal(
+    listChatsForUser(undefined, { includeArchived: true }).some((chat) => chat.id === archived.id),
+    true,
+  );
+});
+
+test("upsertMessage patches one message without dropping list metadata", () => {
+  const { appendMessage, createChat, getChat, listChatsForUser, upsertMessage } = modules[0];
+  const chat = createChat("Checkpoint");
+  appendMessage(chat.id, { role: "user", content: "hello" });
+  const assistantId = randomUUID();
+  upsertMessage(chat.id, { id: assistantId, role: "assistant", content: "one" });
+  upsertMessage(chat.id, { id: assistantId, role: "assistant", content: "one two three" });
+  const loaded = getChat(chat.id);
+  assert.equal(loaded?.messages.at(-1)?.content, "one two three");
+  assert.equal(loaded?.messages.filter((item) => item.id === assistantId).length, 1);
+  assert.equal(listChatsForUser().find((item) => item.id === chat.id)?.title, "Checkpoint");
+});
+
+test("chat list poll is 30s idle and 10s while a run is active", () => {
+  assert.equal(CHAT_LIST_POLL_IDLE_MS, 30_000);
+  assert.equal(CHAT_LIST_POLL_ACTIVE_MS, 10_000);
+  const src = readFileSync(path.join(import.meta.dirname, "../components/app-shell.tsx"), "utf8");
+  assert.match(src, /CHAT_LIST_POLL_IDLE_MS/);
+  assert.match(src, /document\.visibilityState === "hidden"/);
+  assert.equal(/setInterval\(\(\) => void loadChats\(\), 10000\)/.test(src), false);
 });

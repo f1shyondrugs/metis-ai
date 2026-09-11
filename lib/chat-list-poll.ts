@@ -1,0 +1,2 @@
+export const CHAT_LIST_POLL_IDLE_MS = 30_000;
+export const CHAT_LIST_POLL_ACTIVE_MS = 10_000;

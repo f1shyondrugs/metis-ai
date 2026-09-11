@@ -1,9 +1,9 @@
 # Production audit — 11 Sep 2026
 
-Code patches landed 11 Sep 2026 (no slot-build, no systemd restart). Live processes still run the previous build until the next approved deploy.
+Code patches landed 11 Sep 2026. Live units run `9d6e9d0` until the next approved slot deploy.
 
-**Shipped in git:** P0-1, P0-2, P0-3, P1-1, P1-2, P1-6, P2-4.
-**Still open:** P1-3, P1-4, P1-5 (needs restart), P2-1, P2-2, P2-3, BUG-C3 priority classes, SEC-10, SEC-13.
+**Shipped in git:** P0-1, P0-2, P0-3, P1-1, P1-2, P1-6, P2-4, **P1-3**.
+**Still open:** P1-4, P1-5 (needs restart), P2-1, P2-2, P2-3, BUG-C3 priority classes, SEC-10, SEC-13.
 
 ## Shipped
 
@@ -38,11 +38,15 @@ Evidence: `lib/db-store.ts`, `lib/sqlite.ts`.
 
 `/api/runs` and `/api/chat` persist attachments inside `beforeInsert`, so a 409 does not leave files.
 
+### P1-3 Perf — chat checkpoint + list SQL
+
+Sidebar list reads `chat_list` (indexed columns, filter in SQL). `upsertMessage` patches `$.messages[n]` with `json_set` / `json_insert` instead of rewriting the full chat blob. Idle `/api/chats` poll is 30 s (10 s while a run is active; skipped when the tab is hidden).
+Evidence: `lib/db-store.ts`, `lib/sqlite.ts`, `lib/chat-list-poll.ts`, `tests/production-audit.test.ts`.
+
 ## Still open
 
 | ID | Area | Effort | Notes |
 | --- | --- | --- | --- |
-| P1-3 | Perf | 3–4 h | Chat checkpoint every 1.5 s rewrites full JSON; list SQL 14× `json_extract`; poll every 10 s |
 | P1-4 | UI | ~2.5 h | `toLowerCase` TypeError / React #185; virtualize message list |
 | P1-5 | Prod | 20 min | systemd `MemoryMax`/`TasksMax` — **needs explicit restart** |
 | P2-1 | Prod | 15 min | nginx: block `Next-Action` without origin |

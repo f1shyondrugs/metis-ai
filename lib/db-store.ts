@@ -156,6 +156,100 @@ export function normalizeChatKeywords(value: unknown): string[] {
   return keywords;
 }
 
+function syncChatList(chat: Chat) {
+  getDatabase()
+    .prepare(
+      `INSERT INTO chat_list (
+        id, owner_id, title, keywords, last_message_sent, created_at, updated_at,
+        agent_id, model_id, run_status, run_updated_at, queue_message,
+        pending_question, pending_approval, badge, pinned, archived, share,
+        automation_run_id, incognito, project_id, expires_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(id) DO UPDATE SET
+        owner_id=excluded.owner_id,
+        title=excluded.title,
+        keywords=excluded.keywords,
+        last_message_sent=excluded.last_message_sent,
+        created_at=excluded.created_at,
+        updated_at=excluded.updated_at,
+        agent_id=excluded.agent_id,
+        model_id=excluded.model_id,
+        run_status=excluded.run_status,
+        run_updated_at=excluded.run_updated_at,
+        queue_message=excluded.queue_message,
+        pending_question=excluded.pending_question,
+        pending_approval=excluded.pending_approval,
+        badge=excluded.badge,
+        pinned=excluded.pinned,
+        archived=excluded.archived,
+        share=excluded.share,
+        automation_run_id=excluded.automation_run_id,
+        incognito=excluded.incognito,
+        project_id=excluded.project_id,
+        expires_at=excluded.expires_at`,
+    )
+    .run(
+      chat.id,
+      chat.ownerId ?? null,
+      chat.title || "New chat",
+      chat.keywords?.length ? JSON.stringify(chat.keywords) : null,
+      chat.lastMessageSent ?? null,
+      chat.createdAt,
+      chat.updatedAt,
+      chat.agentId ?? null,
+      chat.modelId ?? null,
+      chat.runStatus ?? null,
+      chat.runUpdatedAt ?? null,
+      chat.queueMessage ?? null,
+      chat.pendingQuestion ? JSON.stringify(chat.pendingQuestion) : null,
+      chat.pendingApproval ? JSON.stringify(chat.pendingApproval) : null,
+      chat.badge ?? null,
+      chat.pinned ? 1 : 0,
+      chat.archived ? 1 : 0,
+      chat.share ? JSON.stringify(chat.share) : null,
+      chat.automationRunId ?? null,
+      chat.incognito ? 1 : 0,
+      chat.projectId ?? null,
+      chat.expiresAt ?? null,
+    );
+}
+
+function persistAssistantMessage(chat: Chat, index: number, message: ChatMessage, mode: "set" | "append") {
+  const updatedAt = now();
+  chat.updatedAt = updatedAt;
+  const db = getDatabase();
+  if (mode === "append") {
+    db.prepare(
+      `UPDATE chats
+       SET data = json_insert(
+             json_set(
+               CASE json_type(data, '$.messages') WHEN 'array' THEN data ELSE json_set(data, '$.messages', json('[]')) END,
+               '$.updatedAt', ?
+             ),
+             '$.messages[#]',
+             json(?)
+           ),
+           updated_at = ?
+       WHERE id = ?`,
+    ).run(updatedAt, JSON.stringify(message), updatedAt, chat.id);
+  } else {
+    db.prepare(
+      `UPDATE chats
+       SET data = json_set(
+             CASE json_type(data, '$.messages') WHEN 'array' THEN data ELSE json_set(data, '$.messages', json('[]')) END,
+             ?, json(?),
+             '$.updatedAt', ?
+           ),
+           updated_at = ?
+       WHERE id = ?`,
+    ).run(`$.messages[${index}]`, JSON.stringify(message), updatedAt, updatedAt, chat.id);
+  }
+  chatCache.set(chat.id, { updatedAt, chat });
+  for (const key of chatPageCache.keys()) {
+    if (key.includes(`:${chat.id}:`)) chatPageCache.delete(key);
+  }
+}
+
 export function listChatsForUser(
   ownerId?: string,
   options: { includeArchived?: boolean } = {},
@@ -169,51 +263,34 @@ export function listChatsForUser(
   const rows = ownerId
     ? db.prepare(
         `SELECT id, owner_id AS ownerId, created_at AS createdAt, updated_at AS updatedAt,
-                json_extract(data, '$.lastMessageSent') AS lastMessageSent,
-                json_extract(data, '$.title') AS title,
-                json_extract(data, '$.keywords') AS keywords,
-                json_extract(data, '$.agentId') AS agentId,
-                json_extract(data, '$.modelId') AS modelId,
-                json_extract(data, '$.runStatus') AS runStatus,
-                json_extract(data, '$.runUpdatedAt') AS runUpdatedAt,
-                json_extract(data, '$.queueMessage') AS queueMessage,
-                json_extract(data, '$.pendingQuestion') AS pendingQuestion,
-                json_extract(data, '$.pendingApproval') AS pendingApproval,
-                json_extract(data, '$.badge') AS badge,
-                json_extract(data, '$.pinned') AS pinned,
-                json_extract(data, '$.archived') AS archived,
-                json_extract(data, '$.share') AS share,
-                json_extract(data, '$.automationRunId') AS automationRunId,
-                json_extract(data, '$.incognito') AS incognito,
-         json_extract(data, '$.projectId') AS projectId
-         FROM chats WHERE owner_id = ?`,
-      ).all(ownerId)
+                last_message_sent AS lastMessageSent, title, keywords, agent_id AS agentId,
+                model_id AS modelId, run_status AS runStatus, run_updated_at AS runUpdatedAt,
+                queue_message AS queueMessage, pending_question AS pendingQuestion,
+                pending_approval AS pendingApproval, badge, pinned, archived, share,
+                automation_run_id AS automationRunId, incognito, project_id AS projectId
+         FROM chat_list
+         WHERE owner_id = ?
+           AND incognito = 0
+           AND (automation_run_id IS NULL OR automation_run_id = '')
+           AND (? = 1 OR archived = 0)
+         ORDER BY pinned DESC, COALESCE(last_message_sent, created_at) DESC`,
+      ).all(ownerId, options.includeArchived ? 1 : 0)
     : db.prepare(
         `SELECT id, owner_id AS ownerId, created_at AS createdAt, updated_at AS updatedAt,
-                json_extract(data, '$.lastMessageSent') AS lastMessageSent,
-                json_extract(data, '$.title') AS title,
-                json_extract(data, '$.keywords') AS keywords,
-                json_extract(data, '$.agentId') AS agentId,
-                json_extract(data, '$.modelId') AS modelId,
-                json_extract(data, '$.runStatus') AS runStatus,
-                json_extract(data, '$.runUpdatedAt') AS runUpdatedAt,
-                json_extract(data, '$.queueMessage') AS queueMessage,
-                json_extract(data, '$.pendingQuestion') AS pendingQuestion,
-                json_extract(data, '$.pendingApproval') AS pendingApproval,
-                json_extract(data, '$.badge') AS badge,
-                json_extract(data, '$.pinned') AS pinned,
-                json_extract(data, '$.archived') AS archived,
-                json_extract(data, '$.share') AS share,
-                json_extract(data, '$.automationRunId') AS automationRunId,
-                json_extract(data, '$.incognito') AS incognito,
-         json_extract(data, '$.projectId') AS projectId
-         FROM chats`,
-      ).all();
+                last_message_sent AS lastMessageSent, title, keywords, agent_id AS agentId,
+                model_id AS modelId, run_status AS runStatus, run_updated_at AS runUpdatedAt,
+                queue_message AS queueMessage, pending_question AS pendingQuestion,
+                pending_approval AS pendingApproval, badge, pinned, archived, share,
+                automation_run_id AS automationRunId, incognito, project_id AS projectId
+         FROM chat_list
+         WHERE incognito = 0
+           AND (automation_run_id IS NULL OR automation_run_id = '')
+           AND (? = 1 OR archived = 0)
+         ORDER BY pinned DESC, COALESCE(last_message_sent, created_at) DESC`,
+      ).all(options.includeArchived ? 1 : 0);
   const result: ChatIndexEntry[] = rows.flatMap((row) => {
       const item = row as Record<string, unknown>;
       const archived = Boolean(item.archived);
-      if (item.incognito || item.automationRunId) return [];
-      if (!options.includeArchived && archived) return [];
       const pendingQuestion = parseJsonField<PendingChatQuestion>(item.pendingQuestion);
       const pendingApproval = parseJsonField<ChatIndexEntry["pendingApproval"]>(item.pendingApproval);
       const share = parseJsonField<ChatShare>(item.share);
@@ -241,10 +318,6 @@ export function listChatsForUser(
         ...(share ? { share: publicShare(share) as ChatIndexEntry["share"] } : {}),
     ...(typeof item.projectId === "string" && item.projectId ? { projectId: item.projectId } : {}),
       }];
-    })
-    .sort((a, b) => {
-      if (Boolean(a.pinned) !== Boolean(b.pinned)) return a.pinned ? -1 : 1;
-      return (b.lastMessageSent || b.createdAt).localeCompare(a.lastMessageSent || a.createdAt);
     });
   chatIndexCache = { key: cacheKey, expiresAt: Date.now() + 1_000, chats: result };
   return result;
@@ -452,6 +525,7 @@ function saveChatInternal(chat: Chat, options?: { touchUpdatedAt?: boolean }) {
       updated.createdAt,
       updated.updatedAt,
     );
+  syncChatList(updated);
   chatCache.set(updated.id, { updatedAt: updated.updatedAt, chat: updated });
   for (const key of chatPageCache.keys()) {
     if (key.includes(`:${updated.id}:`)) chatPageCache.delete(key);
@@ -495,7 +569,10 @@ export function createChat(
 
 export function cleanupExpiredIncognitoChats() {
   const result = getDatabase().prepare(
-    "DELETE FROM chats WHERE json_extract(data, '$.incognito') = 1 AND json_extract(data, '$.expiresAt') IS NOT NULL AND json_extract(data, '$.expiresAt') <= ?",
+    `DELETE FROM chats WHERE id IN (
+      SELECT id FROM chat_list
+      WHERE incognito = 1 AND expires_at IS NOT NULL AND expires_at <= ?
+    )`,
   ).run(now());
   if (result.changes > 0) {
     chatIndexCache = null;
@@ -759,7 +836,15 @@ export function canTransitionRunStatus(from: ChatRunStatus, to: ChatRunStatus) {
 export function deleteChat(id: string, ownerId?: string) {
   return transaction(() => {
     if (!getChat(id, ownerId)) return false;
-    return getDatabase().prepare("DELETE FROM chats WHERE id = ?").run(id).changes > 0;
+    const deleted = getDatabase().prepare("DELETE FROM chats WHERE id = ?").run(id).changes > 0;
+    if (deleted) {
+      chatCache.delete(id);
+      chatIndexCache = null;
+      for (const key of chatPageCache.keys()) {
+        if (key.includes(`:${id}:`)) chatPageCache.delete(key);
+      }
+    }
+    return deleted;
   });
 }
 
@@ -967,9 +1052,14 @@ export function upsertMessage(chatId: string, message: Omit<ChatMessage, "create
     if (!chat) return null;
     const index = chat.messages.findIndex((item) => item.id === message.id);
     const next = { ...message, createdAt: message.createdAt || chat.messages[index]?.createdAt || now() };
-    if (index >= 0) chat.messages[index] = next;
-    else chat.messages.push(next);
-    return saveChatInternal(chat);
+    if (index >= 0) {
+      chat.messages[index] = next;
+      persistAssistantMessage(chat, index, next, "set");
+    } else {
+      chat.messages.push(next);
+      persistAssistantMessage(chat, chat.messages.length - 1, next, "append");
+    }
+    return chat;
   });
 }
 

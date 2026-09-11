@@ -595,6 +595,67 @@ export function getDatabase(): DatabaseSync {
     // JSON1 is always present on supported Node SQLite builds; ignore if the table is mid-migration.
   }
   migrateLegacy(database);
+  database.exec(`
+    CREATE TABLE IF NOT EXISTS chat_list (
+      id TEXT PRIMARY KEY REFERENCES chats(id) ON DELETE CASCADE,
+      owner_id TEXT,
+      title TEXT NOT NULL DEFAULT 'New chat',
+      keywords TEXT,
+      last_message_sent TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      agent_id TEXT,
+      model_id TEXT,
+      run_status TEXT,
+      run_updated_at TEXT,
+      queue_message TEXT,
+      pending_question TEXT,
+      pending_approval TEXT,
+      badge TEXT,
+      pinned INTEGER NOT NULL DEFAULT 0,
+      archived INTEGER NOT NULL DEFAULT 0,
+      share TEXT,
+      automation_run_id TEXT,
+      incognito INTEGER NOT NULL DEFAULT 0,
+      project_id TEXT,
+      expires_at TEXT
+    );
+    CREATE INDEX IF NOT EXISTS chat_list_owner_sidebar
+      ON chat_list(owner_id, incognito, automation_run_id, archived, pinned, last_message_sent);
+  `);
+  database.exec(`
+    INSERT OR REPLACE INTO chat_list (
+      id, owner_id, title, keywords, last_message_sent, created_at, updated_at,
+      agent_id, model_id, run_status, run_updated_at, queue_message,
+      pending_question, pending_approval, badge, pinned, archived, share,
+      automation_run_id, incognito, project_id, expires_at
+    )
+    SELECT
+      chats.id,
+      chats.owner_id,
+      COALESCE(json_extract(chats.data, '$.title'), 'New chat'),
+      json_extract(chats.data, '$.keywords'),
+      json_extract(chats.data, '$.lastMessageSent'),
+      chats.created_at,
+      chats.updated_at,
+      json_extract(chats.data, '$.agentId'),
+      json_extract(chats.data, '$.modelId'),
+      json_extract(chats.data, '$.runStatus'),
+      json_extract(chats.data, '$.runUpdatedAt'),
+      json_extract(chats.data, '$.queueMessage'),
+      json_extract(chats.data, '$.pendingQuestion'),
+      json_extract(chats.data, '$.pendingApproval'),
+      json_extract(chats.data, '$.badge'),
+      CASE WHEN json_extract(chats.data, '$.pinned') IN (1, 'true', '1') THEN 1 ELSE 0 END,
+      CASE WHEN json_extract(chats.data, '$.archived') IN (1, 'true', '1') THEN 1 ELSE 0 END,
+      json_extract(chats.data, '$.share'),
+      json_extract(chats.data, '$.automationRunId'),
+      CASE WHEN json_extract(chats.data, '$.incognito') IN (1, 'true', '1') THEN 1 ELSE 0 END,
+      json_extract(chats.data, '$.projectId'),
+      json_extract(chats.data, '$.expiresAt')
+    FROM chats
+    WHERE NOT EXISTS (SELECT 1 FROM chat_list WHERE chat_list.id = chats.id);
+  `);
   database.prepare(
     "INSERT OR IGNORE INTO meta (key, value) VALUES ('provider_connections_schema', '1')",
   ).run();
