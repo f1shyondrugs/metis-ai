@@ -2,6 +2,7 @@ import { getAuthenticatedUserId, isAuthenticated } from "@/lib/auth";
 import { checkGatewayHealth } from "@/lib/mcp";
 import { listChatProviderConnections } from "@/lib/provider-connections";
 import { getUserAgentCwd } from "@/lib/mcp";
+import { getSetupStatus } from "@/lib/setup";
 import { readWorkerHeartbeat } from "@/lib/worker-health";
 import { isHostAdmin } from "@/lib/user-access";
 
@@ -23,6 +24,7 @@ export async function GET(req: Request) {
     agentCwd: ownerId ? getUserAgentCwd(ownerId) : undefined,
     cursorSdkConfigured: hasCursorSdkConnection,
     isHostAdmin: Boolean(ownerId && isHostAdmin(ownerId)),
+    setup: getSetupStatus(ownerId ?? undefined),
     providers: connections.map((connection) => ({
       id: connection.id,
       providerKey: connection.providerKey,

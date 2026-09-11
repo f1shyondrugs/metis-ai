@@ -766,6 +766,7 @@ type StatusPayload = {
   isHostAdmin?: boolean;
   agentCwd?: string;
   cursorSdkConfigured: boolean;
+  setup?: { needed: boolean; hasUsers: boolean; setupComplete?: boolean };
   mcp: { ok: boolean; url: string; detail: string };
   providers?: Array<{
     id: string;
@@ -3537,6 +3538,9 @@ export default function AppShell({ defaultCwd }: { defaultCwd: string }) {
       setStatus(data);
       authedRef.current = data.authenticated;
       setAuthed(data.authenticated);
+      if (data.setup) {
+        setSetupStatus({ needed: Boolean(data.setup.needed), hasUsers: Boolean(data.setup.hasUsers) });
+      }
     } catch {
       // Keep an authenticated session during transient network failures.
       if (authedRef.current !== true) {
@@ -9293,9 +9297,9 @@ export default function AppShell({ defaultCwd }: { defaultCwd: string }) {
      void fetch("/api/setup", { cache: "no-store" })
        .then(async (response) => {
          const body = (await response.json().catch(() => ({}))) as { needed?: boolean; hasUsers?: boolean };
-         setSetupStatus({ needed: Boolean(body.needed), hasUsers: Boolean(body.hasUsers) });
+         setSetupStatus((current) => current ?? { needed: Boolean(body.needed), hasUsers: Boolean(body.hasUsers) });
        })
-       .catch(() => setSetupStatus({ needed: false, hasUsers: true }));
+       .catch(() => setSetupStatus((current) => current ?? { needed: false, hasUsers: true }));
    }, []);
 
    useEffect(() => {
@@ -9317,11 +9321,11 @@ export default function AppShell({ defaultCwd }: { defaultCwd: string }) {
    return <MaintenanceScreen reason={maintenanceState.reason} logs={maintenanceState.logs} />;
  }
 
- if (setupStatus?.needed) {
+ if (setupStatus?.needed && !setupStatus.hasUsers) {
    return (
      <SetupWizard
        open
-       hasUsers={setupStatus.hasUsers}
+       hasUsers={false}
        onFinished={() => {
          setSetupStatus({ needed: false, hasUsers: true });
          window.location.reload();
@@ -9337,6 +9341,19 @@ export default function AppShell({ defaultCwd }: { defaultCwd: string }) {
       </main>
     );
   }
+
+ if (setupStatus.needed && authed) {
+   return (
+     <SetupWizard
+       open
+       hasUsers={setupStatus.hasUsers}
+       onFinished={() => {
+         setSetupStatus({ needed: false, hasUsers: true });
+         window.location.reload();
+       }}
+     />
+   );
+ }
 
   if (!authed) {
     return (

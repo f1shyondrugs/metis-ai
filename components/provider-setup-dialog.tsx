@@ -277,7 +277,7 @@ export function ProviderSetupDialog({
               ))}
             </div>
             <div className="flex justify-end gap-2">
- {onSkip && !embedded ? <Button type="button" variant="ghost" onClick={onSkip}>Skip for now</Button> : null}
+ {onSkip ? <Button type="button" variant="ghost" onClick={onSkip}>Skip for now</Button> : null}
               <Button type="button" onClick={() => setStep(2)} disabled={!selected}>
                 Continue <ArrowRight className="size-4" />
               </Button>
