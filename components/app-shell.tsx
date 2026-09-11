@@ -11,6 +11,7 @@ import {
   useLayoutEffect,
   useRef,
   useState,
+  startTransition,
   type PointerEvent as ReactPointerEvent,
 } from "react";
 import { useSearchParams } from "next/navigation";
@@ -4370,13 +4371,13 @@ export default function AppShell({ defaultCwd }: { defaultCwd: string }) {
               localStorage.getItem(MODEL_STORAGE_KEY) ||
               "";
             const serverMessages = mapApiMessages(data.chat.messages, data.chat.runStatus);
+            const messages = runtimeRef.current.has(id)
+              ? mergeMessages(stateRef.current.messages, serverMessages)
+              : serverMessages;
             const next: ChatSnapshot = {
-              messages: mergeMessages(
-                runtimeRef.current.has(id) || alreadyActive
-                  ? stateRef.current.messages
-                  : cached.messages,
-                serverMessages,
-              ),
+              messages: runtimeRef.current.has(id)
+                ? mergeMessages(stateRef.current.messages, serverMessages)
+                : mergeMessages(cached.messages, serverMessages),
               chatTitle: data.chat.title,
               incognito: Boolean(data.chat.incognito),
               updatedAt: data.chat.updatedAt,
@@ -4420,7 +4421,7 @@ export default function AppShell({ defaultCwd }: { defaultCwd: string }) {
             // A soft revalidation can finish while the foreground SSE stream
             // is still applying deltas. Keep that live state instead of
             // replacing it with the older durable snapshot.
-            setMessages((current) => mergeMessages(current, serverMessages));
+            setMessages(() => messages);
             applyServerQueuedMessages(next.queuedMessages);
             setWorkspaces(next.workspaces);
             setBrowserTabs(next.browserContext.tabs);
@@ -4849,11 +4850,9 @@ export default function AppShell({ defaultCwd }: { defaultCwd: string }) {
         if (!res.ok || activeChatIdRef.current !== activeChatId) return;
         const data = (await res.json()) as { chat: Chat };
         if (!acceptServerSnapshot(activeChatId, data.chat.updatedAt)) return;
-        const liveRun = runtimeRef.current.has(activeChatId);
-        if (!liveRun) {
-          setMessages((current) => mergeMessages(current, mapApiMessages(data.chat.messages, data.chat.runStatus)));
-        }
+        setMessages((current) => mergeMessages(current, mapApiMessages(data.chat.messages, data.chat.runStatus)));
         applyServerQueuedMessages(Array.isArray(data.chat.queuedMessages) ? data.chat.queuedMessages : []);
+        const liveRun = runtimeRef.current.has(activeChatId);
         if (data.chat.modelId && !liveRun) {
           setModelId(data.chat.modelId);
           setModelParams(
@@ -6808,9 +6807,6 @@ export default function AppShell({ defaultCwd }: { defaultCwd: string }) {
       ...(referencesToSend.length ? { references: [...referencesToSend] } : {}),
     };
     let asstId = `a-${Date.now()}`;
-    const isCurrentAssistant = (message: Msg) =>
-      message.id === asstId ||
-      (message.role === "assistant" && message.streaming === true);
     setMessages((m) => [
       ...m,
       userMsg,
@@ -6835,22 +6831,6 @@ export default function AppShell({ defaultCwd }: { defaultCwd: string }) {
       assistantMessageId: asstId,
       generation,
     });
-
-    const reconcileDurableText = async () => {
-      if (activeChatIdRef.current !== chatId) return;
-      try {
-        const res = await fetchReadWithRetry(
-          `/api/chats/${encodeURIComponent(chatId)}?messageLimit=${CHAT_MESSAGE_LOAD_LIMIT}&messageOffset=0`,
-          { cache: "no-store" },
-        );
-        if (!res.ok || activeChatIdRef.current !== chatId) return;
-        const data = (await res.json()) as { chat: Chat };
-        if (!acceptServerSnapshot(chatId, data.chat.updatedAt)) return;
-        setMessages((current) => mergeMessages(current, mapApiMessages(data.chat.messages, data.chat.runStatus)));
-      } catch {
-        // The live stream already has the answer; a later poll retries this.
-      }
-    };
 
     try {
       let attachmentsPayload:
@@ -7043,40 +7023,33 @@ export default function AppShell({ defaultCwd }: { defaultCwd: string }) {
             asstId = serverMessageId;
           } else if (event === "text" && typeof payload.text === "string") {
             const chunk = payload.text;
-            const replace = payload.replace === true;
-            setMessages((m) =>
-              m.map((x) => {
-                if (!isCurrentAssistant(x)) return x;
-                const parts = [...(x.parts ?? partsFromFlat(x))];
-                for (let i = 0; i < parts.length; i++) {
-                  const p = parts[i];
-                  if (p.type === "thinking" && !p.done) {
-                    parts[i] = { ...p, done: true };
+            startTransition(() => {
+              setMessages((m) =>
+                m.map((x) => {
+                  if (x.id !== asstId) return x;
+                  const parts = [...(x.parts ?? partsFromFlat(x))];
+                  for (let i = 0; i < parts.length; i++) {
+                    const p = parts[i];
+                    if (p.type === "thinking" && !p.done) {
+                      parts[i] = { ...p, done: true };
+                    }
                   }
-                }
-                if (replace) {
-                  const nextParts: MsgPart[] = parts.filter((part) => part.type !== "text");
-                  nextParts.push({ type: "text", content: chunk });
+                  const last = parts[parts.length - 1];
+                  if (last?.type === "text") {
+                    parts[parts.length - 1] = {
+                      type: "text",
+                      content: last.content + chunk,
+                    };
+                  } else {
+                    parts.push({ type: "text", content: chunk });
+                  }
                   return {
                     ...x,
-                    ...withSyncedFlat(nextParts, { thinkingDone: true }),
+                    ...withSyncedFlat(parts, { thinkingDone: true }),
                   };
-                }
-                const last = parts[parts.length - 1];
-                if (last?.type === "text") {
-                  parts[parts.length - 1] = {
-                    type: "text",
-                    content: last.content + chunk,
-                  };
-                } else {
-                  parts.push({ type: "text", content: chunk });
-                }
-                return {
-                  ...x,
-                  ...withSyncedFlat(parts, { thinkingDone: true }),
-                };
-              }),
-            );
+                }),
+              );
+            });
           } else if (
             event === "suggestions" &&
             Array.isArray(payload.suggestions)
@@ -7094,7 +7067,7 @@ export default function AppShell({ defaultCwd }: { defaultCwd: string }) {
             // answer replaces the refused response instead of appending to it.
             setMessages((m) =>
               m.map((x) => {
-                if (!isCurrentAssistant(x)) return x;
+                if (x.id !== asstId) return x;
                 const parts = [...(x.parts ?? partsFromFlat(x))].filter(
                   (p) => p.type !== "text",
                 );
@@ -7107,7 +7080,7 @@ export default function AppShell({ defaultCwd }: { defaultCwd: string }) {
           } else if (event === "thinking") {
             setMessages((m) =>
               m.map((x) => {
-                if (!isCurrentAssistant(x)) return x;
+                if (x.id !== asstId) return x;
                 const parts = [...(x.parts ?? partsFromFlat(x))];
                 const done =
                   payload.done === true ? true : undefined;
@@ -7258,7 +7231,7 @@ export default function AppShell({ defaultCwd }: { defaultCwd: string }) {
             }
             setMessages((m) =>
               m.map((x) => {
-                if (!isCurrentAssistant(x)) return x;
+                if (x.id !== asstId) return x;
                 const parts = [...(x.parts ?? partsFromFlat(x))];
                 const exactIndex = parts.findIndex(
                   (p) => p.type === "tool" && p.id === callId,
@@ -7580,9 +7553,8 @@ export default function AppShell({ defaultCwd }: { defaultCwd: string }) {
           }
         }
       }
-      if (activeChatIdRef.current === chatId) {
-        void reconcileDurableText();
-        window.setTimeout(() => void reconcileDurableText(), 400);
+      if (terminalEventSeen && activeChatIdRef.current === chatId) {
+        void loadChat(chatId, { skipNav: true });
       }
     } catch (err) {
       if ((err as Error).name !== "AbortError") {
@@ -7627,7 +7599,6 @@ export default function AppShell({ defaultCwd }: { defaultCwd: string }) {
         setLiveStatus("");
       }
       void loadChats();
-      if (activeChatIdRef.current === chatId) void reconcileDurableText();
     }
   }
 

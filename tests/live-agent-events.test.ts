@@ -63,16 +63,6 @@ test("runtime timeline transport is durable SSE, not a client-side process-local
   assert.doesNotMatch(route, /runtimeEventBus/);
 });
 
-test("fast completed runs emit durable assistant text before synthetic done", () => {
-  const route = readFileSync(path.join(root, "app", "api", "runs", "route.ts"), "utf8");
-  const shell = readFileSync(path.join(root, "components", "app-shell.tsx"), "utf8");
-  assert.match(route, /emitDurableAssistantText/);
-  assert.match(route, /replace: true/);
-  assert.match(shell, /const replace = payload\.replace === true/);
-  assert.match(shell, /reconcileDurableText/);
-});
-
-
 test("workspace creation schemas require real content and worker loads deploy overrides", () => {
   const gateway = readFileSync(path.join(root, "lib", "mcp-core", "gateway-core.mjs"), "utf8");
   const workerUnit = readFileSync(path.join(root, "deploy", "systemd", "metis-ai-worker.service.template"), "utf8");
@@ -114,8 +104,7 @@ test("completed runs hand the durable queue back to the server scheduler", () =>
 test("live snapshots keep the optimistic model and merge queue tombstones", () => {
   const shell = readFileSync(path.join(root, "components", "app-shell.tsx"), "utf8");
   assert.match(shell, /if \(!runtimeRef\.current\.has\(id\)\) \{[\s\S]*?setModelId\(next\.modelId\)/);
-  assert.match(shell, /const liveRun = runtimeRef\.current\.has\(activeChatId\);\s*if \(!liveRun\)/);
-  assert.match(shell, /window\.setTimeout\(\(\) => void reconcileDurableText\(\), 400\)/);
+  assert.match(shell, /const liveRun = runtimeRef\.current\.has\(activeChatId\);\s*if \(data\.chat\.modelId && !liveRun\)/);
   assert.doesNotMatch(shell, /if \(data\.chat\.modelId\) setModelId\(data\.chat\.modelId\)/);
 });
 

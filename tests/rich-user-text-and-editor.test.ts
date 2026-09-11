@@ -63,8 +63,6 @@ test("subagent chat shows the loading chat state until the first fetch", () => {
   assert.match(subagentView, /setReady\(false\)/);
 });
 
-test("text deltas apply immediately so fast replies stay visible", () => {
-  assert.match(shell, /event === "text" && typeof payload\.text === "string"/);
-  assert.match(shell, /content: last\.content \+ chunk/);
-  assert.doesNotMatch(shell, /startTransition\(\(\) => \{/);
+test("text deltas yield to the UI thread", () => {
+  assert.match(shell, /startTransition\(\(\) => \{/);
 });

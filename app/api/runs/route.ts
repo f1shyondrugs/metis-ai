@@ -35,7 +35,6 @@ export async function GET(req: Request) {
           async start(controller) {
             const send = (event: string, data: unknown, id?: number) => {
               if (stopped) return;
-              if (event === "text") sentText = true;
               const payload = id && data && typeof data === "object"
                 ? { ...(data as Record<string, unknown>), sequence: id }
                 : data;
@@ -52,16 +51,6 @@ export async function GET(req: Request) {
             // device-id mismatch cannot hide the live answer on the tab that sent it.
             const snapshotOnly = snapshotRequested;
             const skipDelta = new Set(["text", "thinking"]);
-            let sentText = false;
-            const emitDurableAssistantText = () => {
-              if (sentText || snapshotOnly) return;
-              const chat = getChat(chatId, userId);
-              const assistant = [...(chat?.messages ?? [])]
-                .reverse()
-                .find((message) => message.role === "assistant" && Boolean(message.content?.trim()));
-              if (!assistant?.content) return;
-              send("text", { text: assistant.content, replace: true });
-            };
             while (Date.now() < deadline) {
               const events = listRunEvents(
                 chatId!,
@@ -86,30 +75,12 @@ export async function GET(req: Request) {
               if (jobId) {
                 const currentJob = getJob(jobId);
                 if (currentJob?.status === "completed" || currentJob?.status === "cancelled") {
-                  const lateEvents = listRunEvents(
-                    chatId!,
-                    userId,
-                    cursor,
-                    jobId,
-                  ) as Array<{ id: number; event: string; data: unknown }>;
-                  for (const event of lateEvents) {
-                    cursor = event.id;
-                    if (snapshotOnly && skipDelta.has(event.event)) continue;
-                    send(event.event, event.data, event.id);
-                    if (event.event === "done" || event.event === "error") {
-                      stopped = true;
-                      controller.close();
-                      return;
-                    }
-                  }
-                  emitDurableAssistantText();
                   send("done", { status: currentJob.status });
                   stopped = true;
                   controller.close();
                   return;
                 }
                 if (currentJob?.status === "error" || currentJob?.status === "interrupted") {
-                  emitDurableAssistantText();
                   send("error", {
                     message: currentJob.error || (currentJob.status === "interrupted"
                       ? "Agent run interrupted."

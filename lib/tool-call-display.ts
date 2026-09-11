@@ -1078,15 +1078,6 @@ export function messageLiveWeight(message: MergeableChatMessage) {
   );
 }
 
-export function messageTextLength(message: MergeableChatMessage) {
-  const parts = message.parts ?? [];
-  const partText = parts.reduce((sum, part) => {
-    if (part.type === "text" || part.type === "thinking") return sum + (part.content?.length || 0);
-    return sum;
-  }, 0);
-  return Math.max(message.content?.length || 0, partText);
-}
-
 export function adoptOptimisticAssistantId<T extends MergeableChatMessage>(current: T[], incoming: T[]) {
   const optimistic = [...current].reverse().find((message) => (
     message.role === "assistant" && message.streaming && message.id.startsWith("a-")
@@ -1099,36 +1090,19 @@ export function adoptOptimisticAssistantId<T extends MergeableChatMessage>(curre
 }
 
 export function mergeChatMessages<T extends MergeableChatMessage>(current: T[], incoming: T[]) {
-  const optimistic = [...current].reverse().find((message) => (
-    message.role === "assistant" && message.streaming && message.id.startsWith("a-")
-  ));
-  const serverAssistant = [...incoming].reverse().find((message) => message.role === "assistant");
-  const live = current;
-  const normalizedIncoming = optimistic && serverAssistant && optimistic.id !== serverAssistant.id
-    ? incoming.map((message) => (
-      message.id === serverAssistant.id
-        ? { ...message, id: optimistic.id }
-        : message
-    ))
-    : incoming;
+  const live = adoptOptimisticAssistantId(current, incoming);
   const byId = new Map(live.map((message) => [message.id, message]));
   const order = new Map(live.map((message, index) => [message.id, index]));
-  normalizedIncoming.forEach((message) => {
+  incoming.forEach((message) => {
     const existing = byId.get(message.id);
     if (!order.has(message.id)) order.set(message.id, order.size);
     if (!existing) {
       byId.set(message.id, message);
       return;
     }
-    const incomingText = messageTextLength(message);
-    const existingText = messageTextLength(existing);
-    const incomingWeight = messageLiveWeight(message);
-    const existingWeight = messageLiveWeight(existing);
     if (existing.streaming) {
-      if (incomingText < existingText) {
-        byId.set(message.id, { ...message, ...existing, streaming: true });
-        return;
-      }
+      const incomingWeight = messageLiveWeight(message);
+      const existingWeight = messageLiveWeight(existing);
       byId.set(
         message.id,
         incomingWeight > existingWeight
@@ -1137,21 +1111,7 @@ export function mergeChatMessages<T extends MergeableChatMessage>(current: T[], 
       );
       return;
     }
-    if (incomingText < existingText) {
-      byId.set(message.id, {
-        ...message,
-        ...existing,
-        streaming: false,
-        serverSequence: Math.max(existing.serverSequence || 0, message.serverSequence || 0) || existing.serverSequence,
-      });
-      return;
-    }
-    byId.set(message.id, {
-      ...existing,
-      ...message,
-      streaming: message.streaming,
-      content: message.content || existing.content,
-    });
+    byId.set(message.id, message);
   });
   return [...byId.values()].sort((a, b) => {
     const sequenceOrder = (a.serverSequence || 0) - (b.serverSequence || 0);

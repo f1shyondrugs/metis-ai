@@ -8,7 +8,6 @@ import {
   hydrateCanvasPreview,
   isToolRunning,
   layoutAssistantParts,
-  mergeChatMessages,
   planFromToolPayload,
   remoteClientHostnameMap,
   todosFromToolPayload,
@@ -220,32 +219,6 @@ test("workspaceIdFromLink reads canvas ids and rejects the other kind", () => {
     workspaceIdFromLink("workspace://canvas/845bcc13-ceb6-47b1-b80e-c65eb65e8b82", "plan"),
     undefined,
   );
-});
-
-test("mergeChatMessages keeps streamed text when a finished empty snapshot arrives late", () => {
-  const merged = mergeChatMessages(
-    [{ id: "asst-1", role: "assistant", content: "Schnell fertig.", streaming: false }],
-    [{ id: "asst-1", role: "assistant", content: "" }],
-  );
-  assert.equal(merged[0]?.content, "Schnell fertig.");
-});
-
-test("mergeChatMessages keeps longer live text while the assistant is still streaming", () => {
-  const merged = mergeChatMessages(
-    [{ id: "asst-1", role: "assistant", content: "Hello world", streaming: true }],
-    [{ id: "asst-1", role: "assistant", content: "Hello", streaming: true }],
-  );
-  assert.equal(merged[0]?.content, "Hello world");
-  assert.equal(merged[0]?.streaming, true);
-});
-
-test("mergeChatMessages preserves the optimistic assistant id during revalidation", () => {
-  const merged = mergeChatMessages(
-    [{ id: "a-local", role: "assistant", content: "Hello", streaming: true }],
-    [{ id: "a-server", role: "assistant", content: "Hello", streaming: true }],
-  );
-  assert.equal(merged.length, 1);
-  assert.equal(merged[0]?.id, "a-local");
 });
 
 test("layoutAssistantParts presents todo directly below the latest plan", () => {
