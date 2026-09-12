@@ -169,7 +169,7 @@ export function SetupWizard({
         </h1>
         <p className="text-sm leading-6 text-muted-foreground">
           {step === "welcome"
-            ? "Create the first people on this instance, then connect a model. This only runs once."
+            ? "Create the first people on this instance, then connect a model."
             : step === "people"
               ? "The first account is an admin. Add more people if you want, and toggle admin on any of them."
               : step === "provider"

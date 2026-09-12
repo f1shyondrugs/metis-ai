@@ -223,14 +223,16 @@ export function ProviderSetupDialog({
 
   const body = (
     <>
-        <DialogHeader className={embedded ? "p-0" : undefined}>
-        <DialogTitle>{step === 4 ? "You’re ready to chat" : "Add your provider"}</DialogTitle>
+      {embedded ? null : (
+        <DialogHeader>
+          <DialogTitle>{step === 4 ? "You’re ready to chat" : "Add your provider"}</DialogTitle>
           <DialogDescription>
             {step === 4
               ? "Your provider is connected. Choose how you want to continue."
               : "A few quick steps are all it takes to start chatting."}
           </DialogDescription>
         </DialogHeader>
+      )}
         {loading ? (
           <div className="flex items-center justify-center py-10 text-sm text-muted-foreground">
             <LoaderCircle className="mr-2 size-4 animate-spin" /> Loading providers…

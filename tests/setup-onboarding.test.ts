@@ -75,3 +75,13 @@ test("CHAT_PASSWORD does not seed a first-run user", async () => {
   assert.equal(status.hasUsers, false);
   assert.equal(status.needed, true);
 });
+
+test("embedded provider setup does not render DialogTitle outside Dialog", () => {
+  const dialog = readFileSync(path.join(root, "components/provider-setup-dialog.tsx"), "utf8");
+  const wizard = readFileSync(path.join(root, "components/setup-wizard.tsx"), "utf8");
+  assert.match(wizard, /<ProviderSetupDialog[\s\S]*embedded/);
+  assert.match(dialog, /embedded \? null : \(/);
+  const titleAt = dialog.indexOf("<DialogTitle>");
+  const embeddedGuardAt = dialog.indexOf("embedded ? null");
+  assert.ok(embeddedGuardAt >= 0 && titleAt > embeddedGuardAt, "DialogTitle must sit behind the embedded null guard");
+});
