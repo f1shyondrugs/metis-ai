@@ -84,7 +84,7 @@ bash metis-docker-install.sh --version latest
 Für reproduzierbare Installationen kann ein konkreter Release-Tag verwendet werden:
 
 ```bash
-bash metis-docker-install.sh --version v1.0.2
+bash metis-docker-install.sh --version v1.0.3
 ```
 
 Ein Upgrade wird mit demselben Befehl und einer neuen Version ausgeführt. Die
