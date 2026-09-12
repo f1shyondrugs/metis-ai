@@ -453,6 +453,14 @@ $dockerEnv
 $utf8NoBom = New-Object System.Text.UTF8Encoding $false
 [System.IO.File]::WriteAllText((Join-Path $InstallDir ".env"), $envLines.Trim() + [Environment]::NewLine, $utf8NoBom)
 Merge-PreservedEnv (Join-Path $InstallDir ".env")
+$mergedEnv = Join-Path $InstallDir ".env"
+foreach ($line in Get-Content -LiteralPath $mergedEnv) {
+  $k = Get-EnvKey $line
+  if (-not $k) { continue }
+  $v = $line.Substring($k.Length + 1).Trim().Trim('"')
+  if ($k -eq 'PORT' -and $v -match '^[0-9]+$') { $port = $v }
+  if ($k -eq 'MCP_PORT' -and $v -match '^[0-9]+$') { $mcpPort = $v }
+}
 
 if ($useDocker) {
   Push-Location $InstallDir

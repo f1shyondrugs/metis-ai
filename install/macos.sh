@@ -164,7 +164,6 @@ fi
 public_url="${public_url:-http://${public_host}:${port}}"
 
 [[ "$port" =~ ^[0-9]+$ && "$port" -ge 1 && "$port" -le 65535 ]] || die "Web port must be a number between 1 and 65535."
-mcp_port="$(pick_free_port "$mcp_port")"
 [[ "$mcp_port" =~ ^[0-9]+$ && "$mcp_port" -ge 1 && "$mcp_port" -le 65535 ]] || die "MCP port must be a number between 1 and 65535."
 [[ "$service_name" =~ ^[A-Za-z0-9][A-Za-z0-9_-]*$ ]] || die "Service name may contain letters, numbers, underscores and hyphens."
 
@@ -344,6 +343,60 @@ merge_preserved_env() {
   printf 'Merged previous .env into %s (old values kept, new keys added).\n' "$dest"
 }
 
+read_env_key() {
+  local file="$1" key="$2"
+  awk -v key="$key" '
+    index($0, key "=") == 1 {
+      val = substr($0, length(key) + 2)
+      gsub(/\r/, "", val)
+      gsub(/^"/, "", val)
+      gsub(/"$/, "", val)
+      print val
+      exit
+    }
+  ' "$file"
+}
+
+upsert_env_key() {
+  local dest="$1" key="$2" value="$3" tmp line
+  line="$(write_env_line "$key" "$value" | tr -d '\n')"
+  tmp="$dest.tmp"
+  awk -v key="$key" -v line="$line" '
+    BEGIN { replaced = 0 }
+    $0 ~ "^" key "=" { print line; replaced = 1; next }
+    { print }
+    END { if (!replaced) print line }
+  ' "$dest" > "$tmp"
+  mv "$tmp" "$dest"
+  chmod 600 "$dest"
+}
+
+apply_merged_runtime_ports() {
+  local dest="$1" value next
+  [[ -f "$dest" ]] || return 0
+  value="$(read_env_key "$dest" PORT)"
+  if [[ "$value" =~ ^[0-9]+$ ]]; then
+    port="$value"
+  fi
+  value="$(read_env_key "$dest" MCP_PORT)"
+  if [[ "$value" =~ ^[0-9]+$ ]]; then
+    mcp_port="$value"
+  fi
+  if port_in_use "$mcp_port"; then
+    if curl --fail --silent --max-time 2 "http://127.0.0.1:${mcp_port}/health" >/dev/null 2>&1; then
+      return 0
+    fi
+    next="$(pick_free_port "$mcp_port")"
+    if [[ "$next" == "$mcp_port" ]]; then
+      return 0
+    fi
+    printf 'Preserved MCP port %s is in use; using %s instead.\n' "$mcp_port" "$next"
+    mcp_port="$next"
+    upsert_env_key "$dest" MCP_PORT "$mcp_port"
+    upsert_env_key "$dest" MCP_PUBLIC_URL "http://127.0.0.1:$mcp_port"
+  fi
+}
+
 uninstall_detected_install() {
   local dir="$1" data=""
   [[ -n "$dir" && "$dir" != "/" && "$dir" != "$HOME" ]] || die "Refusing to uninstall an unsafe install directory: ${dir:-unknown}"
@@ -397,6 +450,9 @@ if [[ -n "$existing_service_state" ]]; then
       ;;
   esac
 fi
+
+mcp_port="$(pick_free_port "$mcp_port")"
+[[ "$mcp_port" =~ ^[0-9]+$ && "$mcp_port" -ge 1 && "$mcp_port" -le 65535 ]] || die "MCP port must be a number between 1 and 65535."
 
 install_homebrew() {
   command -v brew >/dev/null 2>&1 && return 0
@@ -485,6 +541,7 @@ adopt_env_stash "$install_dir"
 } > "$install_dir/.env"
 chmod 600 "$install_dir/.env"
 merge_preserved_env "$install_dir/.env"
+apply_merged_runtime_ports "$install_dir/.env"
 
 if (( use_docker )); then
   (

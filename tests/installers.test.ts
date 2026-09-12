@@ -232,6 +232,11 @@ test("installers merge a previous .env on replace and upgrade", () => {
     const writeAt = source.indexOf('} > "$install_dir/.env"');
     const mergeAt = source.lastIndexOf('merge_preserved_env "$install_dir/.env"');
     assert.ok(writeAt >= 0 && mergeAt > writeAt, "merge must run after writing the new .env template");
+    const applyAt = source.lastIndexOf('apply_merged_runtime_ports "$install_dir/.env"');
+    assert.ok(applyAt > mergeAt, "health-check ports must be re-read after env merge");
+    const pickAt = source.lastIndexOf('mcp_port="$(pick_free_port "$mcp_port")"');
+    const stopAt = source.indexOf("uninstall_detected_install");
+    assert.ok(pickAt > stopAt, "MCP port must be chosen after stopping a replaced install");
   }
   assert.match(windows, /Save-ExistingEnv/);
   assert.match(windows, /Merge-PreservedEnv/);
