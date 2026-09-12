@@ -14,6 +14,7 @@ import {
   RUNTIME_MODE_TO_CODEX,
   runtimeModeForChat,
 } from "@/lib/runtime-mode";
+import { iterateUntilAborted } from "@/lib/providers/stream-guard";
 import {
   asRecord,
   asString,
@@ -269,7 +270,7 @@ async function runCodex(context: ProviderContext): Promise<ProviderResult> {
     });
     let usage: ProviderResult["usage"] | undefined;
     let emittedAgentMessage = false;
-    for await (const event of streamed.events) {
+    for await (const event of iterateUntilAborted(streamed.events, context.signal)) {
       context.onStream({
         type: event.type,
         ...("item" in event ? { item: event.item } : {}),

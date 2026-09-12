@@ -28,6 +28,7 @@ import type { AgentJob } from "@/lib/jobs";
 import { appendRunEvent, getJob, touchJob, updateJob } from "@/lib/db-jobs";
 import { modeById } from "@/lib/modes";
 import { estimateProviderInputTokens } from "@/lib/providers/adapters/provider-support";
+import { activeInFlightTool } from "@/lib/providers/stream-guard";
 import { logError } from "@/lib/error-logs";
 import { persistToolsForMessage } from "@/lib/tool-persistence";
 import { recordSignal } from "@/lib/model-telemetry";
@@ -144,11 +145,7 @@ export async function runAlternativeProviderJob(
   }, 30_000);
   const progressWatchdog = setInterval(() => {
     if (controller.signal.aborted) return;
-    const activeTool = tools.find((tool) =>
-      ["running", "in_progress", "pending", "started", "executing", "queued"].includes(
-        String(tool.status || "").toLowerCase(),
-      ),
-    );
+    const activeTool = activeInFlightTool(tools);
     const limit = activeTool ? providerToolIdleMs : providerIdleMs;
     const idleFor = Date.now() - lastProviderProgressAt;
     if (idleFor < limit) return;

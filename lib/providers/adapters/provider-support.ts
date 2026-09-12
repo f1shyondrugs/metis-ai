@@ -36,6 +36,10 @@ import {
 } from "@/lib/provider-connections";
 import { getProviderDefinition } from "@/lib/providers/registry";
 import type { ProviderResult } from "./contract";
+import {
+  iterateUntilAborted,
+  openAIUsesResponsesApi,
+} from "@/lib/providers/stream-guard";
 import type { AgentJob } from "@/lib/jobs";
 import { modeById } from "@/lib/modes";
 import {
@@ -819,10 +823,15 @@ export function aiModel(
     providerKey === "openai" ||
     (providerKey === "codex" && connection.authType === "api_key")
   ) {
-    return createOpenAI({
+    const openai = createOpenAI({
       apiKey: secret,
       ...(baseURL ? { baseURL } : {}),
-    }).chat(modelId);
+    });
+    // Codex model IDs are Responses-only. Chat Completions can accept the
+    // request and then never send finish_reason, which leaves the chat spinning.
+    return openAIUsesResponsesApi(modelId)
+      ? (openai.responses(modelId) as LanguageModel)
+      : openai.chat(modelId);
   }
   if (providerKey === "anthropic") {
     return createAnthropic({
@@ -1063,7 +1072,10 @@ export async function consumeAiStream(
     };
 
     try {
-      for await (const part of streamResult.stream) {
+      for await (const part of iterateUntilAborted(
+        streamResult.stream,
+        context.signal,
+      )) {
         context.onStream({
           type: part.type,
           ...(part.type === "text-delta" || part.type === "reasoning-delta"
