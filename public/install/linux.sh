@@ -290,12 +290,96 @@ restore_stashed_data() {
   printf 'Restored kept data to %s\n' "$dest"
 }
 
+REPLACE_ENV_STASH=""
+
+env_stash_path() {
+  local dir="$1" resolved
+  resolved="$(realpath -m "$dir")"
+  printf '%s/.%s.metis-keep-env' "$(dirname "$resolved")" "$(basename "$resolved")"
+}
+
+preserve_existing_env() {
+  local dir="$1" src="$dir/.env"
+  [[ -f "$src" ]] || return 0
+  REPLACE_ENV_STASH="$(env_stash_path "$dir")"
+  cp -a -- "$src" "$REPLACE_ENV_STASH"
+  chmod 600 "$REPLACE_ENV_STASH"
+  printf 'Kept previous .env at %s\n' "$REPLACE_ENV_STASH"
+}
+
+adopt_env_stash() {
+  local dir="$1" candidate
+  [[ -n "${REPLACE_ENV_STASH:-}" && -f "$REPLACE_ENV_STASH" ]] && return 0
+  candidate="$(env_stash_path "$dir")"
+  if [[ -f "$candidate" ]]; then
+    REPLACE_ENV_STASH="$candidate"
+    return 0
+  fi
+  preserve_existing_env "$dir"
+}
+
+merge_preserved_env() {
+  local dest="$1" preserved="${REPLACE_ENV_STASH:-}" tmp
+  [[ -n "$preserved" && -f "$preserved" && -f "$dest" ]] || return 0
+  tmp="$dest.tmp"
+  # METIS_ENV_MERGE_BEGIN
+  awk -v preserved="$preserved" '
+    function key_of(line,   k) {
+      if (line ~ /^[ \t]*#/ || line ~ /^[ \t]*$/) return ""
+      k = line
+      sub(/\r$/, "", k)
+      if (index(k, "=") == 0) return ""
+      sub(/=.*/, "", k)
+      return k
+    }
+    function is_structural(k) {
+      return (k == "AI_CHAT_ROOT" || k == "AI_CHAT_INSTALL_DIR" || k == "METIS_NODE_BIN" || k == "METIS_NODE_HOME" || k == "CHAT_DATA_DIR" || k == "METIS_DATA_DIR" || k == "AGENT_CWD" || k == "METIS_WORKSPACE" || k == "AI_CHAT_MCP_STATE_DIR" || k == "METIS_DOCKER" || k == "AI_CHAT_SERVICE_NAME")
+    }
+    BEGIN {
+      while ((getline line < preserved) > 0) {
+        k = key_of(line)
+        if (k != "") {
+          old[k] = line
+          if (!(k in seen_old)) {
+            seen_old[k] = 1
+            old_order[++n] = k
+          }
+        }
+      }
+      close(preserved)
+    }
+    {
+      k = key_of($0)
+      if (k != "" && !is_structural(k) && (k in old)) {
+        print old[k]
+        used[k] = 1
+      } else {
+        print $0
+        if (k != "") used[k] = 1
+      }
+    }
+    END {
+      for (i = 1; i <= n; i++) {
+        k = old_order[i]
+        if (!(k in used) && !is_structural(k)) print old[k]
+      }
+    }
+  ' "$dest" > "$tmp"
+  # METIS_ENV_MERGE_END
+  mv "$tmp" "$dest"
+  chmod 600 "$dest"
+  rm -f -- "$preserved"
+  REPLACE_ENV_STASH=""
+  printf 'Merged previous .env into %s (old values kept, new keys added).\n' "$dest"
+}
+
 uninstall_detected_install() {
   local dir="$1" data=""
   [[ -n "$dir" && "$dir" != "/" && "$dir" != "$HOME" ]] || die "Refusing to uninstall an unsafe install directory: ${dir:-unknown}"
   printf 'Uninstalling existing Metis AI at %s (data kept).\n' "$dir"
   data="$(read_existing_data_dir "$dir")"
   stop_linux_units "$service_name"
+  preserve_existing_env "$dir"
   stash_nested_data "$dir" "$data"
   rm -rf -- "$dir"
 }
@@ -423,6 +507,7 @@ secrets_key="$(rand_hex)"
 mcp_token="$(rand_hex)"
 
 mkdir -p "$data_dir" "$agent_cwd"
+adopt_env_stash "$install_dir"
 {
   write_env_line APP_NAME "Metis AI"
   write_env_line PORT "$port"
@@ -450,12 +535,13 @@ mkdir -p "$data_dir" "$agent_cwd"
     printf 'METIS_DOCKER=1\n'
     write_env_line AGENT_CWD "/workspace"
     write_env_line CHAT_DATA_DIR "/data"
-           else
+  else
     write_env_line METIS_NODE_BIN "$node_bin"
     write_env_line METIS_NODE_HOME "$node_home"
   fi
 } > "$install_dir/.env"
 chmod 600 "$install_dir/.env"
+merge_preserved_env "$install_dir/.env"
 
 if (( use_docker )); then
   (

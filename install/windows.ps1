@@ -148,6 +148,75 @@ if ($DryRun) {
 }
 
 $script:ReplaceDataStash = $null
+$script:ReplaceEnvStash = $null
+
+function Get-EnvStashPath([string]$Dir) {
+  $full = [IO.Path]::GetFullPath($Dir).TrimEnd('\')
+  return Join-Path (Split-Path -Parent $full) (".$(Split-Path -Leaf $full).metis-keep-env")
+}
+
+function Get-EnvKey([string]$Line) {
+  $trim = $Line.Trim()
+  if (-not $trim -or $trim.StartsWith('#')) { return "" }
+  $idx = $trim.IndexOf('=')
+  if ($idx -lt 1) { return "" }
+  return $trim.Substring(0, $idx)
+}
+
+function Save-ExistingEnv([string]$Dir) {
+  $src = Join-Path $Dir ".env"
+  if (-not (Test-Path -LiteralPath $src)) { return }
+  $script:ReplaceEnvStash = Get-EnvStashPath $Dir
+  Copy-Item -LiteralPath $src -Destination $script:ReplaceEnvStash -Force
+  Write-Host "Kept previous .env at $($script:ReplaceEnvStash)"
+}
+
+function Adopt-EnvStash([string]$Dir) {
+  if ($script:ReplaceEnvStash -and (Test-Path -LiteralPath $script:ReplaceEnvStash)) { return }
+  $candidate = Get-EnvStashPath $Dir
+  if (Test-Path -LiteralPath $candidate) {
+    $script:ReplaceEnvStash = $candidate
+    return
+  }
+  Save-ExistingEnv $Dir
+}
+
+function Merge-PreservedEnv([string]$Dest) {
+  if (-not $script:ReplaceEnvStash -or -not (Test-Path -LiteralPath $script:ReplaceEnvStash) -or -not (Test-Path -LiteralPath $Dest)) { return }
+  $structural = @{}
+  foreach ($key in @(
+    'AI_CHAT_ROOT', 'AI_CHAT_INSTALL_DIR', 'METIS_NODE_BIN', 'METIS_NODE_HOME',
+    'CHAT_DATA_DIR', 'METIS_DATA_DIR', 'AGENT_CWD', 'METIS_WORKSPACE',
+    'AI_CHAT_MCP_STATE_DIR', 'METIS_DOCKER', 'AI_CHAT_SERVICE_NAME'
+  )) { $structural[$key] = $true }
+  $oldLines = [ordered]@{}
+  foreach ($line in Get-Content -LiteralPath $script:ReplaceEnvStash) {
+    $k = Get-EnvKey $line
+    if ($k) { $oldLines[$k] = $line }
+  }
+  $used = @{}
+  $out = New-Object System.Collections.Generic.List[string]
+  foreach ($line in Get-Content -LiteralPath $Dest) {
+    $k = Get-EnvKey $line
+    if ($k -and -not $structural.ContainsKey($k) -and $oldLines.Contains($k)) {
+      $out.Add([string]$oldLines[$k])
+      $used[$k] = $true
+    } else {
+      $out.Add($line)
+      if ($k) { $used[$k] = $true }
+    }
+  }
+  foreach ($k in $oldLines.Keys) {
+    if (-not $used.ContainsKey($k) -and -not $structural.ContainsKey($k)) {
+      $out.Add([string]$oldLines[$k])
+    }
+  }
+  $utf8NoBom = New-Object System.Text.UTF8Encoding $false
+  [IO.File]::WriteAllText($Dest, (($out -join [Environment]::NewLine).TrimEnd() + [Environment]::NewLine), $utf8NoBom)
+  Remove-Item -LiteralPath $script:ReplaceEnvStash -Force
+  $script:ReplaceEnvStash = $null
+  Write-Host "Merged previous .env into $Dest (old values kept, new keys added)."
+}
 
 function Get-ExistingDataDir([string]$Dir) {
   $envFile = Join-Path $Dir ".env"
@@ -192,6 +261,7 @@ function Uninstall-DetectedInstall([string]$Dir) {
   Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
     Where-Object { $_.Name -eq "node.exe" -and $_.CommandLine -and $_.CommandLine.IndexOf($rootNorm, [StringComparison]::OrdinalIgnoreCase) -ge 0 } |
     ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
+  Save-ExistingEnv $Dir
   if ($data -and (Test-Path -LiteralPath $data) -and (Test-PathInside $data $Dir)) {
     $parent = Split-Path -Parent $rootNorm
     $script:ReplaceDataStash = Join-Path $parent (".$(Split-Path -Leaf $rootNorm).metis-keep-data")
@@ -329,6 +399,7 @@ $secretsKey = & $randomHex
 $mcpToken = & $randomHex
 
 New-Item -ItemType Directory -Force -Path $dataDir, $agentCwd | Out-Null
+Adopt-EnvStash $InstallDir
 $dockerEnv = ""
 if ($useDocker) {
   $dockerEnv = @"
@@ -381,6 +452,7 @@ $dockerEnv
 "@
 $utf8NoBom = New-Object System.Text.UTF8Encoding $false
 [System.IO.File]::WriteAllText((Join-Path $InstallDir ".env"), $envLines.Trim() + [Environment]::NewLine, $utf8NoBom)
+Merge-PreservedEnv (Join-Path $InstallDir ".env")
 
 if ($useDocker) {
   Push-Location $InstallDir

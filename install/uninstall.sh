@@ -70,6 +70,20 @@ fi
 run() { if [[ "$DRY_RUN" == true ]]; then printf '+ %s\n' "$*"; else "$@"; fi; }
 
 KEEP_STASH=""
+KEEP_ENV_STASH=""
+stash_keep_env() {
+  [[ "$KEEP_DATA" == true ]] || return 0
+  [[ -f "$INSTALL_DIR/.env" ]] || return 0
+  local install_real
+  install_real="$(realpath -m "$INSTALL_DIR")"
+  KEEP_ENV_STASH="$(dirname "$install_real")/.$(basename "$install_real").metis-keep-env"
+  if [[ "$DRY_RUN" == true ]]; then
+    printf '+ cp %s %s\n' "$INSTALL_DIR/.env" "$KEEP_ENV_STASH"
+  else
+    cp -a -- "$INSTALL_DIR/.env" "$KEEP_ENV_STASH"
+    chmod 600 "$KEEP_ENV_STASH"
+  fi
+}
 stash_nested_keep_data() {
   [[ "$KEEP_DATA" == true ]] || return 0
   if [[ -z "$DATA_DIR" && -d "$INSTALL_DIR/data" ]]; then
@@ -107,6 +121,7 @@ elif command -v systemctl >/dev/null 2>&1; then
   run sudo systemctl daemon-reload
 fi
 stash_nested_keep_data
+stash_keep_env
 if [[ "$KEEP_DATA" != true && -n "$DATA_DIR" && "$DATA_DIR" != "/" && "$DATA_DIR" != "$INSTALL_DIR" ]]; then
   run rm -rf -- "$DATA_DIR"
 fi
@@ -115,8 +130,8 @@ if [[ "$KEEP_DATA" != true && "$DATA_DIR" == "$INSTALL_DIR" ]]; then
   exit 1
 fi
 run rm -rf -- "$INSTALL_DIR"
-if [[ -n "$KEEP_STASH" ]]; then
-  echo "Metis AI uninstalled. Data kept: $KEEP_STASH"
+if [[ -n "$KEEP_STASH" || -n "$KEEP_ENV_STASH" ]]; then
+  echo "Metis AI uninstalled. Data kept: ${KEEP_STASH:-$KEEP_DATA}; env kept: ${KEEP_ENV_STASH:-none}"
 else
   echo "Metis AI uninstalled. Data kept: $KEEP_DATA"
 fi

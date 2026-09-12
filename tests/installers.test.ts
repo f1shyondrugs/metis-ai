@@ -1,4 +1,6 @@
-import { readFileSync, existsSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
@@ -209,6 +211,88 @@ test("windows services start with an absolute node path and short cmd wrappers",
   assert.match(uninstall, /Stop-Process/);
   assert.match(uninstall, /cmd\.exe \/c "schtasks \/Delete/);
   assert.match(uninstall, /function Remove-Tree/);
+});
+
+test("installers merge a previous .env on replace and upgrade", () => {
+  const linux = readFileSync(path.join(root, "install", "linux.sh"), "utf8");
+  const macos = readFileSync(path.join(root, "install", "macos.sh"), "utf8");
+  const windows = readFileSync(path.join(root, "install", "windows.ps1"), "utf8");
+  const uninstall = readFileSync(path.join(root, "install", "uninstall.sh"), "utf8");
+  const uninstallMac = readFileSync(path.join(root, "install", "uninstall-macos.sh"), "utf8");
+  const uninstallWin = readFileSync(path.join(root, "install", "uninstall.ps1"), "utf8");
+  const docker = readFileSync(path.join(root, "public", "install", "docker.sh"), "utf8");
+  for (const source of [linux, macos]) {
+    assert.match(source, /preserve_existing_env/);
+    assert.match(source, /merge_preserved_env/);
+    assert.match(source, /metis-keep-env/);
+    assert.match(source, /old values kept, new keys added/);
+    const preserveAt = source.indexOf('preserve_existing_env "$dir"');
+    const rmAt = source.indexOf('rm -rf -- "$dir"');
+    assert.ok(preserveAt >= 0 && rmAt > preserveAt, "env must be copied before the install directory is removed");
+    const writeAt = source.indexOf('} > "$install_dir/.env"');
+    const mergeAt = source.lastIndexOf('merge_preserved_env "$install_dir/.env"');
+    assert.ok(writeAt >= 0 && mergeAt > writeAt, "merge must run after writing the new .env template");
+  }
+  assert.match(windows, /Save-ExistingEnv/);
+  assert.match(windows, /Merge-PreservedEnv/);
+  assert.match(windows, /metis-keep-env/);
+  assert.match(uninstall, /stash_keep_env/);
+  assert.match(uninstall, /metis-keep-env/);
+  assert.match(uninstallMac, /stash_keep_env/);
+  assert.match(uninstallWin, /metis-keep-env/);
+  assert.match(docker, /if \[\[ ! -f "\$ENV_FILE" \]\]/);
+
+  const awkFrom = (source: string) => {
+    const begin = source.indexOf("# METIS_ENV_MERGE_BEGIN");
+    const end = source.indexOf("# METIS_ENV_MERGE_END");
+    assert.ok(begin >= 0 && end > begin, "env merge awk markers");
+    const block = source.slice(begin, end);
+    const match = block.match(/awk -v preserved="\$preserved" '([\s\S]*)' "\$dest"/);
+    assert.ok(match, "env merge awk program");
+    return match[1];
+  };
+  const awkProgram = awkFrom(linux);
+  assert.equal(awkFrom(macos), awkProgram);
+
+  const dir = mkdtempSync(path.join(os.tmpdir(), "metis-env-merge-"));
+  try {
+    const oldPath = path.join(dir, "old.env");
+    const newPath = path.join(dir, "new.env");
+    writeFileSync(
+      oldPath,
+      [
+        'AI_CHAT_SECRETS_KEY="oldsecret"',
+        'MCP_BEARER_TOKEN="oldtoken"',
+        'CUSTOM_KEY="keepme"',
+        'CHAT_DATA_DIR="/old/data"',
+        'PORT="3200"',
+        "",
+      ].join("\n"),
+    );
+    writeFileSync(
+      newPath,
+      [
+        'AI_CHAT_SECRETS_KEY="newsecret"',
+        'MCP_BEARER_TOKEN="newtoken"',
+        'CHAT_DATA_DIR="/new/data"',
+        'PORT="3100"',
+        'NEW_KEY="added"',
+        'AI_CHAT_ROOT="/new/root"',
+        "",
+      ].join("\n"),
+    );
+    const merged = execFileSync("awk", ["-v", `preserved=${oldPath}`, awkProgram, newPath], { encoding: "utf8" });
+    assert.match(merged, /AI_CHAT_SECRETS_KEY="oldsecret"/);
+    assert.match(merged, /MCP_BEARER_TOKEN="oldtoken"/);
+    assert.match(merged, /CUSTOM_KEY="keepme"/);
+    assert.match(merged, /CHAT_DATA_DIR="\/new\/data"/);
+    assert.match(merged, /PORT="3200"/);
+    assert.match(merged, /NEW_KEY="added"/);
+    assert.match(merged, /AI_CHAT_ROOT="\/new\/root"/);
+    assert.doesNotMatch(merged, /newsecret/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });
 
 test("README documents the bootstrap one-liner rather than curling platform scripts into bash", () => {

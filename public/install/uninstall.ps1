@@ -70,7 +70,15 @@ function Remove-Tree([string]$Path) {
 }
 $shouldKeepData = $KeepData -and -not $RemoveData
 $keepStash = $null
+$keepEnvStash = $null
 if ($shouldKeepData) {
+  $envFile = Join-Path $InstallDir ".env"
+  if (Test-Path -LiteralPath $envFile) {
+    $keepEnvStash = Join-Path (Split-Path -Parent $rootNorm) (".$(Split-Path -Leaf $rootNorm).metis-keep-env")
+    Invoke-Step {
+      Copy-Item -LiteralPath $envFile -Destination $keepEnvStash -Force
+    } "Stash .env to $keepEnvStash"
+  }
   $dataDir = [string]$manifest.dataDir
   if (-not $dataDir) {
     $envFile = Join-Path $InstallDir ".env"
@@ -97,8 +105,8 @@ if (-not $shouldKeepData -and $manifest.dataDir -and ([IO.Path]::GetFullPath($ma
   Invoke-Step { Remove-Tree ([IO.Path]::GetFullPath($manifest.dataDir)) } "Remove data directory"
 }
 Invoke-Step { Start-Sleep -Seconds 1; Remove-Tree $rootNorm } "Remove installation directory"
-if ($keepStash) {
-  Write-Host "Metis AI uninstalled. Data kept: $keepStash"
+if ($keepStash -or $keepEnvStash) {
+  Write-Host "Metis AI uninstalled. Data kept: $(if ($keepStash) { $keepStash } else { $shouldKeepData }); env kept: $(if ($keepEnvStash) { $keepEnvStash } else { 'none' })"
 } else {
   Write-Host "Metis AI uninstalled. Data kept: $shouldKeepData"
 }
