@@ -283,7 +283,6 @@ rand_hex() {
     fi
   }
 }
-chat_password="$(rand_hex)"
 secrets_key="$(rand_hex)"
 mcp_token="$(rand_hex)"
 
@@ -292,7 +291,6 @@ mkdir -p "$data_dir" "$agent_cwd"
   write_env_line APP_NAME "Metis AI"
   write_env_line PORT "$port"
   write_env_line AI_CHAT_HOST "$ai_chat_host"
-   write_env_line CHAT_PASSWORD "$chat_password"
   write_env_line CHAT_DATA_DIR "$data_dir"
   write_env_line AGENT_CWD "$agent_cwd"
   write_env_line AI_CHAT_ROOT "$install_dir"

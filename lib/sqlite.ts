@@ -1,7 +1,7 @@
 import { DatabaseSync } from "node:sqlite";
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import path from "node:path";
-import { randomUUID, pbkdf2Sync, randomBytes } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import { config } from "@/lib/config";
 
 const dataDir = config.dataDir;
@@ -22,10 +22,6 @@ function atomicJson(file: string, value: unknown) {
   const tmp = `${file}.${process.pid}.${Date.now()}.migration`;
   writeFileSync(tmp, `${JSON.stringify(value, null, 2)}\n`, "utf8");
   renameSync(tmp, file);
-}
-
-function hashPassword(password: string, salt = randomBytes(16).toString("hex")) {
-  return `${salt}:${pbkdf2Sync(password, salt, 120_000, 32, "sha256").toString("hex")}`;
 }
 
 function syncLegacyMemories(db: DatabaseSync, memoriesPath: string, ownerId?: string) {
@@ -64,18 +60,8 @@ function migrateLegacy(db: DatabaseSync) {
     usersPath,
     [],
   );
-  if (
-    !users.length &&
-    process.env.CHAT_PASSWORD?.trim() &&
-    !process.env.METIS_AI_BOOTSTRAP_PASSWORD
-  ) {
-    users.push({
-      id: randomUUID(),
-      username: config.chatUsername,
-      passwordHash: hashPassword(process.env.CHAT_PASSWORD.trim()),
-      createdAt: new Date().toISOString(),
-    });
-  }
+  // Fresh installs have no users.json. Do not invent a login from CHAT_PASSWORD;
+  // that secret is leftover shared-password config, and first-run uses the wizard.
   const initialUser = users[0] || (db.prepare(
     "SELECT id, username, password_hash as passwordHash, created_at as createdAt FROM users ORDER BY created_at ASC LIMIT 1",
   ).get() as { id: string; username: string; passwordHash: string; createdAt: string } | undefined);

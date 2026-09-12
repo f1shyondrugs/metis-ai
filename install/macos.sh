@@ -225,7 +225,6 @@ node_home=""
 if [[ -n "$node_bin" ]]; then
   node_home="$(dirname "$(dirname "$node_bin")")"
 fi
-chat_password="$(openssl rand -hex 32)"
 secrets_key="$(openssl rand -hex 32)"
 mcp_token="$(openssl rand -hex 32)"
 
@@ -234,7 +233,6 @@ mkdir -p "$data_dir" "$agent_cwd"
   write_env_line APP_NAME "Metis AI"
   write_env_line PORT "$port"
   write_env_line AI_CHAT_HOST "$ai_chat_host"
-   write_env_line CHAT_PASSWORD "$chat_password"
   write_env_line CHAT_DATA_DIR "$data_dir"
   write_env_line AGENT_CWD "$agent_cwd"
   write_env_line AI_CHAT_ROOT "$install_dir"

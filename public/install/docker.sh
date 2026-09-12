@@ -125,14 +125,12 @@ random_secret() {
 }
 
 if [[ ! -f "$ENV_FILE" ]]; then
-  chat_password="$(random_secret)"
   secrets_key="$(random_secret)"
   mcp_token="$(random_secret)"
   : > "$ENV_FILE"
   chmod 600 "$ENV_FILE"
   upsert_env APP_NAME "$(quote_env "Metis AI")"
   upsert_env CHAT_USERNAME "admin"
-  upsert_env CHAT_PASSWORD "$(quote_env "$chat_password")"
   upsert_env AI_CHAT_SECRETS_KEY "$(quote_env "$secrets_key")"
   upsert_env MCP_BEARER_TOKEN "$(quote_env "$mcp_token")"
   upsert_env MCP_ALLOW_REMOTE_ADMIN "false"

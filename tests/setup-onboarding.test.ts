@@ -1,9 +1,17 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { readFileSync } from "node:fs";
+import { mkdtempSync, readFileSync } from "node:fs";
+import os from "node:os";
 import path from "node:path";
 
 const root = path.join(import.meta.dirname, "..");
+const dataDir = mkdtempSync(path.join(os.tmpdir(), "metis-onboard-"));
+process.env.CHAT_DATA_DIR = dataDir;
+process.env.CHAT_DB_PATH = path.join(dataDir, "chat.sqlite");
+process.env.AGENT_CWD = dataDir;
+process.env.AI_CHAT_ROOT = dataDir;
+process.env.CHAT_PASSWORD = "must-not-become-a-user";
+delete process.env.METIS_AI_BOOTSTRAP_PASSWORD;
 
 test("setup API and wizard exist for first-run onboarding", () => {
   const api = readFileSync(path.join(root, "app/api/setup/route.ts"), "utf8");
@@ -51,4 +59,19 @@ test("existing installs with users are not forced through first-run without a se
   const shell = readFileSync(path.join(root, "components/app-shell.tsx"), "utf8");
   assert.match(helper, /return userCount\(\) > 0/);
   assert.match(shell, /setupStatus\.needed && authed/);
+});
+
+test("CHAT_PASSWORD does not seed a first-run user", async () => {
+  const helper = readFileSync(path.join(root, "lib/sqlite.ts"), "utf8");
+  assert.doesNotMatch(helper, /users\.push\(\{/);
+  assert.doesNotMatch(helper, /hashPassword\(process\.env\.CHAT_PASSWORD/);
+  const linux = readFileSync(path.join(root, "install/linux.sh"), "utf8");
+  assert.doesNotMatch(linux, /CHAT_PASSWORD/);
+  const { getDatabase } = await import("../lib/sqlite");
+  const { getSetupStatus } = await import("../lib/setup");
+  const count = Number((getDatabase().prepare("SELECT COUNT(*) as count FROM users").get() as { count: number }).count);
+  assert.equal(count, 0);
+  const status = getSetupStatus();
+  assert.equal(status.hasUsers, false);
+  assert.equal(status.needed, true);
 });
