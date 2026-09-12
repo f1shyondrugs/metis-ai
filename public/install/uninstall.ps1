@@ -69,8 +69,36 @@ function Remove-Tree([string]$Path) {
   throw "Failed to remove $Path"
 }
 $shouldKeepData = $KeepData -and -not $RemoveData
+$keepStash = $null
+if ($shouldKeepData) {
+  $dataDir = [string]$manifest.dataDir
+  if (-not $dataDir) {
+    $envFile = Join-Path $InstallDir ".env"
+    if (Test-Path -LiteralPath $envFile) {
+      $line = Get-Content -LiteralPath $envFile | Where-Object { $_ -match '^CHAT_DATA_DIR=' } | Select-Object -First 1
+      if ($line) { $dataDir = $line.Substring('CHAT_DATA_DIR='.Length).Trim().Trim('"') }
+    }
+  }
+  if (-not $dataDir -and (Test-Path -LiteralPath (Join-Path $InstallDir "data"))) {
+    $dataDir = Join-Path $InstallDir "data"
+  }
+  if ($dataDir -and (Test-Path -LiteralPath $dataDir)) {
+    $dataFull = [IO.Path]::GetFullPath($dataDir).TrimEnd('\')
+    if ($dataFull -ne $rootNorm -and $dataFull.StartsWith($rootNorm + [IO.Path]::DirectorySeparatorChar, [StringComparison]::OrdinalIgnoreCase)) {
+      $keepStash = "$rootNorm.metis-keep-data"
+      Invoke-Step {
+        if (Test-Path -LiteralPath $keepStash) { Remove-Item -LiteralPath $keepStash -Recurse -Force }
+        Move-Item -LiteralPath $dataDir -Destination $keepStash
+      } "Stash nested data to $keepStash"
+    }
+  }
+}
 if (-not $shouldKeepData -and $manifest.dataDir -and ([IO.Path]::GetFullPath($manifest.dataDir) -ne [IO.Path]::GetFullPath($InstallDir))) {
   Invoke-Step { Remove-Tree ([IO.Path]::GetFullPath($manifest.dataDir)) } "Remove data directory"
 }
 Invoke-Step { Start-Sleep -Seconds 1; Remove-Tree $rootNorm } "Remove installation directory"
-Write-Host "Metis AI uninstalled. Data kept: $shouldKeepData"
+if ($keepStash) {
+  Write-Host "Metis AI uninstalled. Data kept: $keepStash"
+} else {
+  Write-Host "Metis AI uninstalled. Data kept: $shouldKeepData"
+}

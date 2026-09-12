@@ -147,6 +147,74 @@ if ($DryRun) {
   exit 0
 }
 
+$script:ReplaceDataStash = $null
+
+function Get-ExistingDataDir([string]$Dir) {
+  $envFile = Join-Path $Dir ".env"
+  if (Test-Path -LiteralPath $envFile) {
+    $line = Get-Content -LiteralPath $envFile | Where-Object { $_ -match '^CHAT_DATA_DIR=' } | Select-Object -First 1
+    if ($line) {
+      $value = $line.Substring('CHAT_DATA_DIR='.Length).Trim().Trim('"')
+      if ($value) { return $value }
+    }
+  }
+  $manifestPath = Join-Path $Dir ".metis-ai-install.json"
+  if (Test-Path -LiteralPath $manifestPath) {
+    try {
+      $manifest = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
+      if ($manifest.dataDir) { return [string]$manifest.dataDir }
+    } catch {}
+  }
+  $nested = Join-Path $Dir "data"
+  if (Test-Path -LiteralPath $nested) { return $nested }
+  return ""
+}
+
+function Test-PathInside([string]$Inner, [string]$Outer) {
+  $innerFull = [IO.Path]::GetFullPath($Inner).TrimEnd('\')
+  $outerFull = [IO.Path]::GetFullPath($Outer).TrimEnd('\')
+  return ($innerFull -eq $outerFull) -or $innerFull.StartsWith($outerFull + [IO.Path]::DirectorySeparatorChar, [StringComparison]::OrdinalIgnoreCase)
+}
+
+function Uninstall-DetectedInstall([string]$Dir) {
+  if (-not $Dir -or $Dir -eq [IO.Path]::GetPathRoot($Dir) -or $Dir -eq $HOME) {
+    throw "Refusing to uninstall an unsafe install directory: $Dir"
+  }
+  Write-Host "Uninstalling existing Metis AI at $Dir (data kept)."
+  $data = Get-ExistingDataDir $Dir
+  $runKey = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Run"
+  foreach ($suffix in @("app", "worker", "mcp")) {
+    $task = "$serviceName-$suffix"
+    Remove-ItemProperty -LiteralPath $runKey -Name $task -ErrorAction SilentlyContinue
+    cmd.exe /c "schtasks /Delete /TN `"$task`" /F >nul 2>&1" | Out-Null
+  }
+  $rootNorm = [IO.Path]::GetFullPath($Dir).TrimEnd('\')
+  Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
+    Where-Object { $_.Name -eq "node.exe" -and $_.CommandLine -and $_.CommandLine.IndexOf($rootNorm, [StringComparison]::OrdinalIgnoreCase) -ge 0 } |
+    ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
+  if ($data -and (Test-Path -LiteralPath $data) -and (Test-PathInside $data $Dir)) {
+    $parent = Split-Path -Parent $rootNorm
+    $script:ReplaceDataStash = Join-Path $parent (".$(Split-Path -Leaf $rootNorm).metis-keep-data")
+    if (Test-Path -LiteralPath $script:ReplaceDataStash) { Remove-Item -LiteralPath $script:ReplaceDataStash -Recurse -Force }
+    Move-Item -LiteralPath $data -Destination $script:ReplaceDataStash
+    Write-Host "Kept nested data at $($script:ReplaceDataStash)"
+  }
+  Start-Sleep -Seconds 1
+  if (Test-Path -LiteralPath $rootNorm) {
+    cmd.exe /c "rmdir /s /q `"\\?\$rootNorm`"" | Out-Null
+  }
+}
+
+function Restore-StashedData([string]$Dest) {
+  if (-not $script:ReplaceDataStash -or -not (Test-Path -LiteralPath $script:ReplaceDataStash)) { return }
+  $destParent = Split-Path -Parent $Dest
+  if ($destParent) { New-Item -ItemType Directory -Force -Path $destParent | Out-Null }
+  if (Test-Path -LiteralPath $Dest) { Remove-Item -LiteralPath $Dest -Recurse -Force }
+  Move-Item -LiteralPath $script:ReplaceDataStash -Destination $Dest
+  $script:ReplaceDataStash = $null
+  Write-Host "Restored kept data to $Dest"
+}
+
 if ($existingServiceDir) {
   $existingFull = [IO.Path]::GetFullPath($existingServiceDir)
   $installFull = [IO.Path]::GetFullPath($InstallDir)
@@ -167,13 +235,9 @@ if ($existingServiceDir) {
   }
   switch -Regex ($choice) {
     '^[rR]$' {
-      $uninstaller = Join-Path $existingServiceDir "uninstall.ps1"
-      if (-not (Test-Path -LiteralPath $uninstaller)) {
-        $uninstaller = Join-Path $existingServiceDir "install\uninstall.ps1"
-      }
-      if (-not (Test-Path -LiteralPath $uninstaller)) { throw "Could not find uninstall.ps1 in $existingServiceDir." }
-      Write-Host "Uninstalling existing Metis AI at $existingServiceDir (data kept)."
-      & $uninstaller -InstallDir $existingServiceDir -KeepData -Yes
+      $InstallDir = $existingServiceDir
+      if (-not $DataDir) { $dataDir = Join-Path $InstallDir "data" }
+      Uninstall-DetectedInstall $InstallDir
       $existingServiceDir = ""
     }
     '^[uU]$' {
@@ -227,6 +291,7 @@ if (Test-Path (Join-Path $InstallDir ".git")) {
   New-Item -ItemType Directory -Force -Path (Split-Path $InstallDir) | Out-Null
   git clone $RepoUrl $InstallDir
 }
+Restore-StashedData $dataDir
 
 function Get-PnpmCommand {
   $existing = (Get-Command pnpm.cmd -ErrorAction SilentlyContinue).Source

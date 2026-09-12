@@ -121,15 +121,27 @@ if [[ -n "$existing_native" ]]; then
   fi
   case "$choice" in
     r|R)
-      uninstaller=""
-      if [[ -f "${existing_native_dir:-}/uninstall.sh" ]]; then
-        uninstaller="$existing_native_dir/uninstall.sh"
-      elif [[ -f "${existing_native_dir:-}/install/uninstall.sh" ]]; then
-        uninstaller="$existing_native_dir/install/uninstall.sh"
+      native_dir="${existing_native_dir:-}"
+      [[ -n "$native_dir" && "$native_dir" != "/" && "$native_dir" != "$HOME" ]] || fail "Could not resolve the native install directory."
+      printf 'Stopping native Metis AI at %s (data kept; directory left in place).\n' "$native_dir"
+      if command -v systemctl >/dev/null 2>&1; then
+        for unit in metis-ai.service metis-ai-worker.service metis-ai-mcp.service; do
+          if [[ "$(id -u)" -eq 0 ]]; then
+            systemctl disable --now "$unit" >/dev/null 2>&1 || true
+            rm -f "/etc/systemd/system/$unit"
+          else
+            sudo systemctl disable --now "$unit" >/dev/null 2>&1 || true
+            sudo rm -f "/etc/systemd/system/$unit"
+          fi
+        done
+        if [[ "$(id -u)" -eq 0 ]]; then
+          systemctl daemon-reload
+        else
+          sudo systemctl daemon-reload
+        fi
       fi
-      [[ -n "$uninstaller" && -n "$existing_native_dir" ]] || fail "Could not find uninstall.sh for the native install at ${existing_native_dir:-unknown}."
-      printf 'Uninstalling existing Metis AI at %s (data kept).\n' "$existing_native_dir"
-      bash "$uninstaller" --install-dir "$existing_native_dir" --keep-data --yes
+      existing_native=""
+      existing_native_dir=""
       ;;
     a|A)
       printf 'Aborted.\n'

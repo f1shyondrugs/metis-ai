@@ -68,6 +68,33 @@ if [[ "$YES" != true ]]; then
   [[ "$answer" == "yes" ]] || { echo "Aborted."; exit 0; }
 fi
 run() { if [[ "$DRY_RUN" == true ]]; then printf '+ %s\n' "$*"; else "$@"; fi; }
+
+KEEP_STASH=""
+stash_nested_keep_data() {
+  [[ "$KEEP_DATA" == true ]] || return 0
+  if [[ -z "$DATA_DIR" && -d "$INSTALL_DIR/data" ]]; then
+    DATA_DIR="$INSTALL_DIR/data"
+  fi
+  [[ -n "$DATA_DIR" && -e "$DATA_DIR" ]] || return 0
+  local data_real install_real
+  data_real="$(realpath -m "$DATA_DIR")"
+  install_real="$(realpath -m "$INSTALL_DIR")"
+  if [[ "$data_real" == "$install_real" ]]; then
+    echo "Refusing to remove the install directory because dataDir equals installDir." >&2
+    exit 1
+  fi
+  case "$data_real" in
+    "$install_real"/*)
+      KEEP_STASH="${install_real}.metis-keep-data"
+      if [[ "$DRY_RUN" == true ]]; then
+        printf '+ mv %s %s\n' "$data_real" "$KEEP_STASH"
+      else
+        rm -rf -- "$KEEP_STASH"
+        mv -- "$data_real" "$KEEP_STASH"
+      fi
+      ;;
+  esac
+}
 if [[ "$INSTALL_METHOD" == "docker" ]]; then
   if command -v docker >/dev/null 2>&1; then
     (cd "$INSTALL_DIR" && { docker compose down >/dev/null 2>&1 || docker-compose down >/dev/null 2>&1 || true; })
@@ -79,6 +106,7 @@ elif command -v systemctl >/dev/null 2>&1; then
   done
   run sudo systemctl daemon-reload
 fi
+stash_nested_keep_data
 if [[ "$KEEP_DATA" != true && -n "$DATA_DIR" && "$DATA_DIR" != "/" && "$DATA_DIR" != "$INSTALL_DIR" ]]; then
   run rm -rf -- "$DATA_DIR"
 fi
@@ -87,4 +115,8 @@ if [[ "$KEEP_DATA" != true && "$DATA_DIR" == "$INSTALL_DIR" ]]; then
   exit 1
 fi
 run rm -rf -- "$INSTALL_DIR"
-echo "Metis AI uninstalled. Data kept: $KEEP_DATA"
+if [[ -n "$KEEP_STASH" ]]; then
+  echo "Metis AI uninstalled. Data kept: $KEEP_STASH"
+else
+  echo "Metis AI uninstalled. Data kept: $KEEP_DATA"
+fi

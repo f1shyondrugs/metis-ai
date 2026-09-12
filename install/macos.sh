@@ -112,6 +112,7 @@ non_interactive=0
 dry_run=0
 install_dir="$DEFAULT_DIR"
 data_dir=""
+data_dir_set=0
 agent_cwd="$HOME"
 port="3100"
 ai_chat_host=""
@@ -120,10 +121,11 @@ service_name="metis-ai"
 public_url=""
 force_native=0
 replace_existing=0
+REPLACE_DATA_STASH=""
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --install-dir) [[ $# -ge 2 ]] || die "--install-dir requires a value"; install_dir="$2"; shift 2 ;;
-    --data-dir) [[ $# -ge 2 ]] || die "--data-dir requires a value"; data_dir="$2"; shift 2 ;;
+    --data-dir) [[ $# -ge 2 ]] || die "--data-dir requires a value"; data_dir="$2"; data_dir_set=1; shift 2 ;;
     --agent-cwd) [[ $# -ge 2 ]] || die "--agent-cwd requires a value"; agent_cwd="$2"; shift 2 ;;
     --port) [[ $# -ge 2 ]] || die "--port requires a value"; port="$2"; shift 2 ;;
     --host) [[ $# -ge 2 ]] || die "--host requires a value"; ai_chat_host="$2"; shift 2 ;;
@@ -202,20 +204,71 @@ read_tty_line() {
   fi
 }
 
+abspath() {
+  python3 -c 'import os,sys; print(os.path.abspath(os.path.expanduser(sys.argv[1])))' "$1"
+}
+
+read_existing_data_dir() {
+  local dir="$1" value=""
+  if [[ -f "$dir/.env" ]]; then
+    value="$(awk -F= '/^CHAT_DATA_DIR=/{sub(/^CHAT_DATA_DIR=/, ""); gsub(/^"|"$/, ""); print; exit}' "$dir/.env")"
+  fi
+  if [[ -z "$value" && -f "$dir/.metis-ai-install.json" ]] && command -v python3 >/dev/null 2>&1; then
+    value="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("dataDir",""))' "$dir/.metis-ai-install.json" 2>/dev/null || true)"
+  fi
+  if [[ -z "$value" && -d "$dir/data" ]]; then
+    value="$dir/data"
+  fi
+  printf '%s' "$value"
+}
+
+path_is_inside() {
+  local inner outer
+  inner="$(abspath "$1")"
+  outer="$(abspath "$2")"
+  [[ "$inner" == "$outer" || "$inner" == "$outer"/* ]]
+}
+
+stop_macos_units() {
+  local name="$1" suffix
+  for suffix in app worker mcp; do
+    launchctl bootout "gui/$(id -u)" "$HOME/Library/LaunchAgents/${name}-${suffix}.plist" >/dev/null 2>&1 || true
+    rm -f "$HOME/Library/LaunchAgents/${name}-${suffix}.plist"
+  done
+}
+
+stash_nested_data() {
+  local dir="$1" data="$2"
+  REPLACE_DATA_STASH=""
+  [[ -n "$data" && -e "$data" ]] || return 0
+  if path_is_inside "$data" "$dir"; then
+    REPLACE_DATA_STASH="$(dirname "$(abspath "$dir")")/.$(basename "$dir").metis-keep-data"
+    rm -rf -- "$REPLACE_DATA_STASH"
+    mv -- "$data" "$REPLACE_DATA_STASH"
+    printf 'Kept nested data at %s\n' "$REPLACE_DATA_STASH"
+  fi
+}
+
+restore_stashed_data() {
+  local dest="$1"
+  [[ -n "${REPLACE_DATA_STASH:-}" && -e "$REPLACE_DATA_STASH" ]] || return 0
+  mkdir -p "$(dirname "$dest")"
+  if [[ -e "$dest" ]]; then
+    rm -rf -- "$dest"
+  fi
+  mv -- "$REPLACE_DATA_STASH" "$dest"
+  REPLACE_DATA_STASH=""
+  printf 'Restored kept data to %s\n' "$dest"
+}
+
 uninstall_detected_install() {
-  local dir="$1" uninstaller=""
+  local dir="$1" data=""
   [[ -n "$dir" && "$dir" != "/" && "$dir" != "$HOME" ]] || die "Refusing to uninstall an unsafe install directory: ${dir:-unknown}"
-  if [[ -f "$dir/uninstall-macos.sh" ]]; then
-    uninstaller="$dir/uninstall-macos.sh"
-  elif [[ -f "$dir/install/uninstall-macos.sh" ]]; then
-    uninstaller="$dir/install/uninstall-macos.sh"
-  fi
   printf 'Uninstalling existing Metis AI at %s (data kept).\n' "$dir"
-  if [[ -n "$uninstaller" ]]; then
-    bash "$uninstaller" --install-dir "$dir" --keep-data --yes
-  else
-    die "Could not find uninstall-macos.sh in $dir."
-  fi
+  data="$(read_existing_data_dir "$dir")"
+  stop_macos_units "$service_name"
+  stash_nested_data "$dir" "$data"
+  rm -rf -- "$dir"
 }
 
 if [[ -n "$existing_service_state" ]]; then
@@ -236,7 +289,11 @@ if [[ -n "$existing_service_state" ]]; then
   fi
   case "$choice" in
     r|R)
-      uninstall_detected_install "${existing_service_dir:-$install_dir}"
+      install_dir="${existing_service_dir:-$install_dir}"
+      if (( data_dir_set == 0 )); then
+        data_dir="$install_dir/data"
+      fi
+      uninstall_detected_install "$install_dir"
       existing_service_state=""
       existing_service_dir=""
       ;;
@@ -281,6 +338,8 @@ else
   mkdir -p "$(dirname "$install_dir")"
   git clone "$REPO_URL" "$install_dir"
 fi
+
+restore_stashed_data "$data_dir"
 
 use_docker=0
 if (( force_native == 0 )) && command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1; then
