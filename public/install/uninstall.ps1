@@ -1,15 +1,36 @@
 param(
-  [Parameter(Mandatory = $true)]
-  [string]$InstallDir,
+  [string]$InstallDir = "",
+  [string]$ServiceName = "MetisAI",
   [switch]$KeepData,
   [switch]$RemoveData,
   [switch]$DryRun,
   [switch]$Yes
 )
 $ErrorActionPreference = "Stop"
+if (-not $InstallDir) {
+  $runKey = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Run"
+  foreach ($candidate in @($ServiceName, "MetisAI", "metis-ai")) {
+    try {
+      $existingRun = (Get-ItemProperty -LiteralPath $runKey -Name "$candidate-app" -ErrorAction Stop)."$candidate-app"
+      if ($existingRun) {
+        $cmdPath = [string]$existingRun.Trim().Trim('"')
+        if (Test-Path -LiteralPath $cmdPath) {
+          $InstallDir = Split-Path -Parent $cmdPath
+          $ServiceName = $candidate
+          break
+        }
+      }
+    } catch {}
+  }
+}
+if (-not $InstallDir) { throw "Could not detect the install directory from startup entries. Pass -InstallDir DIR." }
 $manifestPath = Join-Path $InstallDir ".metis-ai-install.json"
-if (-not (Test-Path $manifestPath)) { throw "Install manifest not found: $manifestPath" }
-$manifest = Get-Content $manifestPath -Raw | ConvertFrom-Json
+$manifest = $null
+if (Test-Path $manifestPath) {
+  $manifest = Get-Content $manifestPath -Raw | ConvertFrom-Json
+} else {
+  $manifest = [pscustomobject]@{ serviceName = $ServiceName; dataDir = ""; installMethod = "native" }
+}
 if ([IO.Path]::GetFullPath($InstallDir).TrimEnd("\") -eq [IO.Path]::GetPathRoot([IO.Path]::GetFullPath($InstallDir)).TrimEnd("\")) {
   throw "Refusing to remove a filesystem root."
 }

@@ -5,28 +5,62 @@ KEEP_DATA=false
 DRY_RUN=false
 YES=false
 INSTALL_DIR="${METIS_AI_INSTALL_DIR:-}"
+SERVICE_NAME="${METIS_AI_SERVICE_NAME:-metis-ai}"
+
+discover_install_dir() {
+  local service="$1" wd envfiles envfile
+  command -v systemctl >/dev/null 2>&1 || return 1
+  systemctl cat "${service}.service" >/dev/null 2>&1 || return 1
+  wd="$(systemctl show -p WorkingDirectory --value "${service}.service" 2>/dev/null || true)"
+  if [[ -n "$wd" && "$wd" != "/" && "$wd" != "$HOME" ]]; then
+    printf '%s' "$wd"
+    return 0
+  fi
+  envfiles="$(systemctl show -p EnvironmentFiles --value "${service}.service" 2>/dev/null || true)"
+  envfile="$(printf '%s\n' "$envfiles" | awk 'NF { print $1; exit }')"
+  if [[ -n "$envfile" && -e "$envfile" ]]; then
+    printf '%s' "$(dirname "$envfile")"
+    return 0
+  fi
+  return 1
+}
+
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --install-dir) INSTALL_DIR="${2:-}"; shift 2 ;;
+    --service-name) SERVICE_NAME="${2:-}"; shift 2 ;;
     --keep-data) KEEP_DATA=true; shift ;;
     --remove-data) KEEP_DATA=false; shift ;;
     --dry-run) DRY_RUN=true; shift ;;
     --yes) YES=true; shift ;;
-    -h|--help) echo "Usage: uninstall.sh --install-dir DIR [--keep-data|--remove-data] [--dry-run] [--yes]"; exit 0 ;;
+    -h|--help) echo "Usage: uninstall.sh [--install-dir DIR] [--service-name NAME] [--keep-data|--remove-data] [--dry-run] [--yes]"; echo "If --install-dir is omitted, the directory is read from ${SERVICE_NAME}.service (WorkingDirectory / EnvironmentFile)."; exit 0 ;;
     *) echo "Unknown option: $1" >&2; exit 2 ;;
   esac
 done
-[[ -n "$INSTALL_DIR" ]] || { echo "--install-dir is required." >&2; exit 2; }
+if [[ -z "$INSTALL_DIR" ]]; then
+  INSTALL_DIR="$(discover_install_dir "$SERVICE_NAME" || true)"
+fi
+[[ -n "$INSTALL_DIR" ]] || { echo "Could not detect the install directory from ${SERVICE_NAME}.service. Pass --install-dir DIR." >&2; exit 2; }
 INSTALL_DIR="${INSTALL_DIR/#\~/$HOME}"
 MANIFEST="$INSTALL_DIR/.metis-ai-install.json"
-[[ -f "$MANIFEST" ]] || { echo "Install manifest not found: $MANIFEST" >&2; exit 1; }
-command -v python3 >/dev/null 2>&1 || { echo "python3 is required to read the install manifest." >&2; exit 1; }
-IFS=$'\t' read -r SERVICE DATA_DIR INSTALL_METHOD < <(python3 - "$MANIFEST" <<'PY'
+SERVICE="$SERVICE_NAME"
+DATA_DIR=""
+INSTALL_METHOD="native"
+if [[ -f "$MANIFEST" ]]; then
+  command -v python3 >/dev/null 2>&1 || { echo "python3 is required to read the install manifest." >&2; exit 1; }
+  IFS=$'\t' read -r SERVICE DATA_DIR INSTALL_METHOD < <(python3 - "$MANIFEST" <<'PY'
 import json, sys
 data=json.load(open(sys.argv[1]))
 print(data.get("serviceName", "metis-ai"), data.get("dataDir", ""), data.get("installMethod", "native"), sep="\t")
 PY
-)
+  )
+else
+  envfile="$INSTALL_DIR/.env"
+  if [[ -f "$envfile" ]]; then
+    DATA_DIR="$(awk -F= '/^CHAT_DATA_DIR=/{sub(/^CHAT_DATA_DIR=/, ""); gsub(/^"|"$/, ""); print; exit}' "$envfile")"
+  fi
+  [[ -f "$INSTALL_DIR/docker-compose.yml" ]] && INSTALL_METHOD="docker"
+fi
 [[ "$INSTALL_DIR" != "/" && "$INSTALL_DIR" != "$HOME" ]] || { echo "Refusing to remove unsafe install directory." >&2; exit 1; }
 if [[ "$YES" != true ]]; then
   printf 'Remove Metis AI installation at %s? ' "$INSTALL_DIR"

@@ -14,6 +14,7 @@ param(
   [switch]$NonInteractive,
   [switch]$SkipRuntimeInstall,
   [switch]$Native,
+  [switch]$ReplaceExisting,
   [switch]$DryRun,
   [switch]$Help
 )
@@ -30,7 +31,7 @@ use install.ps1 for the one-line installer.
 
 Options: -InstallDir, -DataDir, -AgentCwd, -Port, -Host, -McpPort,
          -Username, -Password, -PasswordFile, -ServiceName, -PublicUrl
-         -NonInteractive, -SkipRuntimeInstall, -Native, -DryRun
+         -NonInteractive, -SkipRuntimeInstall, -Native, -ReplaceExisting, -DryRun
 "@ | Write-Host
   exit 0
 }
@@ -121,6 +122,15 @@ if ($serviceName -notmatch '^[A-Za-z0-9][A-Za-z0-9_-]*$') {
   throw "Service name may contain letters, numbers, underscores and hyphens."
 }
 
+$existingServiceDir = ""
+try {
+  $existingRun = (Get-ItemProperty -LiteralPath "HKCU:\Software\Microsoft\Windows\CurrentVersion\Run" -Name "$serviceName-app" -ErrorAction Stop)."$serviceName-app"
+  if ($existingRun) {
+    $cmdPath = [string]$existingRun.Trim().Trim('"')
+    if (Test-Path -LiteralPath $cmdPath) { $existingServiceDir = Split-Path -Parent $cmdPath }
+  }
+} catch {}
+
 if ($DryRun) {
   Write-Host "Dry run; no files or services will be changed."
   Write-Host "  os:            windows"
@@ -133,7 +143,51 @@ if ($DryRun) {
   Write-Host "  public url:    $publicUrl"
   Write-Host "  username:      $username"
   Write-Host "  native:        $Native"
+  if ($existingServiceDir) { Write-Host "  existing:      $serviceName-app at $existingServiceDir" } else { Write-Host "  existing:      none" }
   exit 0
+}
+
+if ($existingServiceDir) {
+  $existingFull = [IO.Path]::GetFullPath($existingServiceDir)
+  $installFull = [IO.Path]::GetFullPath($InstallDir)
+  $same = $existingFull -eq $installFull
+  $choice = ""
+  if ($ReplaceExisting) {
+    $choice = "r"
+  } elseif ($NonInteractive) {
+    if ($same) { $choice = "u" }
+  } else {
+    Write-Host "Existing Metis AI detected."
+    Write-Host "  service:   $serviceName-app"
+    Write-Host "  directory: $existingServiceDir"
+    Write-Host "[u] Upgrade that install"
+    Write-Host "[r] Replace it (uninstall, keep data, then continue)"
+    Write-Host "[a] Abort"
+    $choice = Read-Host "Choice [u/r/a]"
+  }
+  switch -Regex ($choice) {
+    '^[rR]$' {
+      $uninstaller = Join-Path $existingServiceDir "uninstall.ps1"
+      if (-not (Test-Path -LiteralPath $uninstaller)) {
+        $uninstaller = Join-Path $existingServiceDir "install\uninstall.ps1"
+      }
+      if (-not (Test-Path -LiteralPath $uninstaller)) { throw "Could not find uninstall.ps1 in $existingServiceDir." }
+      Write-Host "Uninstalling existing Metis AI at $existingServiceDir (data kept)."
+      & $uninstaller -InstallDir $existingServiceDir -KeepData -Yes
+      $existingServiceDir = ""
+    }
+    '^[uU]$' {
+      $InstallDir = $existingServiceDir
+      Write-Host "Existing Metis AI install detected: $serviceName-app is registered in $InstallDir. Upgrading in place."
+    }
+    '^[aA]$' {
+      Write-Host "Aborted."
+      exit 0
+    }
+    default {
+      throw "Metis AI is already installed as $serviceName-app in $existingServiceDir. Re-run and choose upgrade/replace, or pass -ReplaceExisting."
+    }
+  }
 }
 
 $useDocker = $false

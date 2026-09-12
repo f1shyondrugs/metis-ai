@@ -101,6 +101,7 @@ Options:
      --service-name NAME     launchd service prefix (default: metis-ai)
   --public-url URL        URL shown to users
   --native                Force Node.js + launchd instead of Docker
+  --replace-existing     Uninstall a detected existing install (keeps data), then continue
   --non-interactive       Never read prompts; all values come from arguments/defaults
   --dry-run               Collect configuration and print the plan, then exit
   -h, --help              Show this help
@@ -118,6 +119,7 @@ mcp_port="8787"
 service_name="metis-ai"
 public_url=""
 force_native=0
+replace_existing=0
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --install-dir) [[ $# -ge 2 ]] || die "--install-dir requires a value"; install_dir="$2"; shift 2 ;;
@@ -129,6 +131,7 @@ while [[ $# -gt 0 ]]; do
              --service-name) [[ $# -ge 2 ]] || die "--service-name requires a value"; service_name="$2"; shift 2 ;;
     --public-url) [[ $# -ge 2 ]] || die "--public-url requires a value"; public_url="$2"; shift 2 ;;
     --native) force_native=1; shift ;;
+    --replace-existing) replace_existing=1; shift ;;
     --non-interactive) non_interactive=1; shift ;;
     --dry-run) dry_run=1; shift ;;
     -h|--help) usage; exit 0 ;;
@@ -163,6 +166,14 @@ mcp_port="$(pick_free_port "$mcp_port")"
 [[ "$mcp_port" =~ ^[0-9]+$ && "$mcp_port" -ge 1 && "$mcp_port" -le 65535 ]] || die "MCP port must be a number between 1 and 65535."
 [[ "$service_name" =~ ^[A-Za-z0-9][A-Za-z0-9_-]*$ ]] || die "Service name may contain letters, numbers, underscores and hyphens."
 
+existing_service_state=""
+existing_service_dir=""
+existing_plist="$HOME/Library/LaunchAgents/${service_name}-app.plist"
+if [[ -f "$existing_plist" ]]; then
+  existing_service_state="launch-agent"
+  existing_service_dir="$(sed -n '/<key>WorkingDirectory<\/key>/{n;s/.*<string>\(.*\)<\/string>.*/\1/p;}' "$existing_plist")"
+fi
+
 if (( dry_run )); then
   cat <<EOF
 Dry run; no files or services will be changed.
@@ -175,8 +186,75 @@ Dry run; no files or services will be changed.
   service name:  $service_name
   public url:    $public_url
   native:        $force_native
+  existing:      ${existing_service_state:-none}${existing_service_dir:+ at $existing_service_dir}
 EOF
   exit 0
+fi
+
+read_tty_line() {
+  local prompt="$1"
+  if [[ -t 0 ]]; then
+    IFS= read -r -p "$prompt" REPLY
+  elif [[ -r /dev/tty ]]; then
+    IFS= read -r -p "$prompt" REPLY < /dev/tty
+  else
+    REPLY=""
+  fi
+}
+
+uninstall_detected_install() {
+  local dir="$1" uninstaller=""
+  [[ -n "$dir" && "$dir" != "/" && "$dir" != "$HOME" ]] || die "Refusing to uninstall an unsafe install directory: ${dir:-unknown}"
+  if [[ -f "$dir/uninstall-macos.sh" ]]; then
+    uninstaller="$dir/uninstall-macos.sh"
+  elif [[ -f "$dir/install/uninstall-macos.sh" ]]; then
+    uninstaller="$dir/install/uninstall-macos.sh"
+  fi
+  printf 'Uninstalling existing Metis AI at %s (data kept).\n' "$dir"
+  if [[ -n "$uninstaller" ]]; then
+    bash "$uninstaller" --install-dir "$dir" --keep-data --yes
+  else
+    die "Could not find uninstall-macos.sh in $dir."
+  fi
+}
+
+if [[ -n "$existing_service_state" ]]; then
+  same=0
+  [[ -n "$existing_service_dir" && "$existing_service_dir" == "$install_dir" ]] && same=1
+  choice=""
+  if (( replace_existing )); then
+    choice=r
+  elif (( non_interactive )); then
+    if (( same )); then choice=u; fi
+  else
+    printf 'Existing Metis AI detected.\n'
+    printf '  service:   %s-app (%s)\n' "$service_name" "$existing_service_state"
+    printf '  directory: %s\n' "${existing_service_dir:-unknown}"
+    printf '[u] Upgrade that install\n[r] Replace it (uninstall, keep data, then continue)\n[a] Abort\n'
+    read_tty_line "Choice [u/r/a]: "
+    choice="$REPLY"
+  fi
+  case "$choice" in
+    r|R)
+      uninstall_detected_install "${existing_service_dir:-$install_dir}"
+      existing_service_state=""
+      existing_service_dir=""
+      ;;
+    u|U)
+      if [[ -n "$existing_service_dir" ]]; then
+        install_dir="$existing_service_dir"
+      fi
+      printf 'Existing Metis AI install detected: %s-app is registered in %s. Upgrading in place.\n' \
+        "$service_name" "$install_dir"
+      ;;
+    a|A)
+      printf 'Aborted.\n'
+      exit 0
+      ;;
+    *)
+      die "Metis AI is already installed as ${service_name}-app in ${existing_service_dir:-an unknown directory}. Re-run and choose upgrade/replace, or pass --replace-existing."
+      ;;
+  esac
 fi
 
 install_homebrew() {

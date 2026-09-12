@@ -151,6 +151,30 @@ test("platform installers collect configuration before side effects and support 
   assert.match(windows, /run-service\.ps1/);
 });
 
+test("installers detect an existing Metis install from OS services", () => {
+  const linux = readFileSync(path.join(root, "install", "linux.sh"), "utf8");
+  const macos = readFileSync(path.join(root, "install", "macos.sh"), "utf8");
+  const windows = readFileSync(path.join(root, "install", "windows.ps1"), "utf8");
+  const docker = readFileSync(path.join(root, "public", "install", "docker.sh"), "utf8");
+  assert.match(linux, /systemctl cat "\$\{service_name\}\.service"/);
+  assert.match(linux, /Choice \[u\/r\/a\]/);
+  assert.match(linux, /--replace-existing/);
+  assert.match(linux, /already installed as \$\{service_name\}\.service/);
+  assert.match(macos, /LaunchAgents\/\$\{service_name\}-app\.plist/);
+  assert.match(macos, /Choice \[u\/r\/a\]/);
+  assert.match(windows, /CurrentVersion\\Run/);
+  assert.match(windows, /Choice \[u\/r\/a\]/);
+  assert.match(docker, /systemctl cat metis-ai\.service/);
+  assert.match(docker, /--replace-existing/);
+  const uninstall = readFileSync(path.join(root, "install", "uninstall.sh"), "utf8");
+  assert.match(uninstall, /discover_install_dir/);
+  assert.match(uninstall, /WorkingDirectory/);
+  assert.doesNotMatch(uninstall, /--install-dir is required/);
+  const detectAt = linux.indexOf("systemctl cat");
+  const cloneAt = linux.indexOf("git clone");
+  assert.ok(detectAt >= 0 && cloneAt > detectAt, "linux service detection must run before clone");
+});
+
 test("windows installer installs pnpm into the install directory instead of Program Files", () => {
   const windows = readFileSync(path.join(root, "install", "windows.ps1"), "utf8");
   assert.match(windows, /Get-PnpmCommand/);

@@ -13,6 +13,7 @@ BIND="${AI_CHAT_BIND:-127.0.0.1}"
 MCP_PORT="${MCP_PORT:-8787}"
 NON_INTERACTIVE=0
 DRY_RUN=0
+REPLACE_EXISTING=0
 
 fail() { printf 'Error: %s\n' "$*" >&2; exit 1; }
 
@@ -32,6 +33,7 @@ Options:
   --mcp-port PORT          MCP gateway port (default: 8787)
   --image-repository REPO  GHCR repository (default: ghcr.io/f1shyondrugs/metis-ai)
   --non-interactive        Do not prompt
+  --replace-existing      Uninstall a detected native install (keeps data), then continue
   --dry-run                Print the planned configuration without changing files
   -h, --help               Show this help
 EOF
@@ -48,6 +50,7 @@ while [[ $# -gt 0 ]]; do
     --mcp-port) [[ $# -ge 2 ]] || fail "--mcp-port requires a value"; MCP_PORT="$2"; shift 2 ;;
     --image-repository) [[ $# -ge 2 ]] || fail "--image-repository requires a value"; IMAGE_REPOSITORY="$2"; shift 2 ;;
     --non-interactive) NON_INTERACTIVE=1; shift ;;
+    --replace-existing) REPLACE_EXISTING=1; shift ;;
     --dry-run) DRY_RUN=1; shift ;;
     -h|--help) usage; exit 0 ;;
     *) fail "Unknown option: $1" ;;
@@ -73,6 +76,13 @@ else
 fi
 docker info >/dev/null 2>&1 || fail "Docker is not running or the current user cannot access it."
 
+existing_native=""
+existing_native_dir=""
+if command -v systemctl >/dev/null 2>&1 && systemctl cat metis-ai.service >/dev/null 2>&1; then
+  existing_native="$(systemctl is-active metis-ai.service 2>/dev/null || true)"
+  existing_native_dir="$(systemctl show -p WorkingDirectory --value metis-ai.service 2>/dev/null || true)"
+fi
+
 IMAGE="${IMAGE_REPOSITORY}:${VERSION}"
 ENV_FILE="$INSTALL_DIR/.env"
 COMPOSE_FILE="$INSTALL_DIR/docker-compose.yml"
@@ -87,8 +97,48 @@ Dry run; no files, containers, or data will be changed.
   workspace: $WORKSPACE_DIR
   web:       $BIND:$PORT
   mcp:       127.0.0.1:$MCP_PORT
+  existing:  ${existing_native:-none}${existing_native_dir:+ native at $existing_native_dir}
 EOF
   exit 0
+fi
+
+if [[ -n "$existing_native" ]]; then
+  choice=""
+  if (( REPLACE_EXISTING )); then
+    choice=r
+  elif (( NON_INTERACTIVE )); then
+    choice=""
+  else
+    printf 'Existing native Metis AI detected.\n'
+    printf '  service:   metis-ai.service (%s)\n' "$existing_native"
+    printf '  directory: %s\n' "${existing_native_dir:-unknown}"
+    printf '[r] Replace it (uninstall native, keep data, then continue)\n[a] Abort\n'
+    if [[ -t 0 ]]; then
+      IFS= read -r -p "Choice [r/a]: " choice
+    elif [[ -r /dev/tty ]]; then
+      IFS= read -r -p "Choice [r/a]: " choice < /dev/tty
+    fi
+  fi
+  case "$choice" in
+    r|R)
+      uninstaller=""
+      if [[ -f "${existing_native_dir:-}/uninstall.sh" ]]; then
+        uninstaller="$existing_native_dir/uninstall.sh"
+      elif [[ -f "${existing_native_dir:-}/install/uninstall.sh" ]]; then
+        uninstaller="$existing_native_dir/install/uninstall.sh"
+      fi
+      [[ -n "$uninstaller" && -n "$existing_native_dir" ]] || fail "Could not find uninstall.sh for the native install at ${existing_native_dir:-unknown}."
+      printf 'Uninstalling existing Metis AI at %s (data kept).\n' "$existing_native_dir"
+      bash "$uninstaller" --install-dir "$existing_native_dir" --keep-data --yes
+      ;;
+    a|A)
+      printf 'Aborted.\n'
+      exit 0
+      ;;
+    *)
+      fail "Metis AI is already installed as metis-ai.service (${existing_native}) in ${existing_native_dir:-an unknown directory}. Re-run and choose replace, or pass --replace-existing."
+      ;;
+  esac
 fi
 
 mkdir -p "$INSTALL_DIR" "$DATA_DIR" "$WORKSPACE_DIR"
