@@ -15,17 +15,53 @@
 #
 # Arguments:
 #   /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/f1shyondrugs/metis-ai/master/install.sh)" -- --non-interactive --port 3100
+#
+# Uninstall:
+#   /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/f1shyondrugs/metis-ai/master/install.sh)" -- uninstall --yes --keep-data
 
 set -euo pipefail
 
+metis_download_and_exec() {
+  local rel="$1" tmp
+  shift
+  if ! command -v curl >/dev/null 2>&1; then
+    printf 'Error: curl is required to download the Metis AI installer.\n' >&2
+    return 1
+  fi
+  tmp="$(mktemp "${TMPDIR:-/tmp}/metis-ai-install.XXXXXX")"
+  if ! curl -fsSL "$base/$rel" -o "$tmp"; then
+    rm -f "$tmp"
+    printf 'Error: failed to download %s/%s\n' "$base" "$rel" >&2
+    return 1
+  fi
+  if ! grep -q 'Metis AI' "$tmp" 2>/dev/null; then
+    rm -f "$tmp"
+    printf 'Error: downloaded installer looks invalid: %s/%s\n' "$base" "$rel" >&2
+    return 1
+  fi
+  chmod u+x "$tmp"
+  exec /bin/bash "$tmp" "$@"
+}
+
 metis_install() {
-  local base script tmp
+  local base script
   base="${METIS_AI_INSTALL_BASE:-https://raw.githubusercontent.com/f1shyondrugs/metis-ai/master}"
   base="${base%/}"
   # v1.0.0 platform scripts cannot compile node-pty on minimal Ubuntu (no make).
   # Native one-liners pin INSTALL_BASE to that tag; fetch current scripts instead.
   if [[ "$base" == "https://raw.githubusercontent.com/f1shyondrugs/metis-ai/v1.0.0" ]]; then
     base="https://raw.githubusercontent.com/f1shyondrugs/metis-ai/master"
+  fi
+  if [[ "${1:-}" == "uninstall" ]]; then
+    case "$(uname -s)" in
+      Darwin) metis_download_and_exec install/macos.sh "$@" ;;
+      Linux) metis_download_and_exec install/linux.sh "$@" ;;
+      *)
+        printf 'Error: unsupported OS %s. On Windows run: irm %s/install.ps1 | iex\n' "$(uname -s)" "$base" >&2
+        return 1
+        ;;
+    esac
+    return
   fi
   case "$(uname -s)" in
     Darwin) script="install/macos.sh" ;;
@@ -35,23 +71,7 @@ metis_install() {
       return 1
       ;;
   esac
-  if ! command -v curl >/dev/null 2>&1; then
-    printf 'Error: curl is required to download the Metis AI installer.\n' >&2
-    return 1
-  fi
-  tmp="$(mktemp "${TMPDIR:-/tmp}/metis-ai-install.XXXXXX")"
-  if ! curl -fsSL "$base/$script" -o "$tmp"; then
-    rm -f "$tmp"
-    printf 'Error: failed to download %s/%s\n' "$base" "$script" >&2
-    return 1
-  fi
-  if ! grep -q 'Metis AI' "$tmp" 2>/dev/null; then
-    rm -f "$tmp"
-    printf 'Error: downloaded installer looks invalid: %s/%s\n' "$base" "$script" >&2
-    return 1
-  fi
-  chmod u+x "$tmp"
-  exec /bin/bash "$tmp" "$@"
+  metis_download_and_exec "$script" "$@"
 }
 
 metis_install "$@"

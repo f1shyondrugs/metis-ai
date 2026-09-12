@@ -1,4 +1,5 @@
 param(
+  [Parameter(Position=0)][string]$Command = "",
   [string]$InstallDir = "",
   [string]$RepoUrl = $env:METIS_AI_REPO_URL,
   [string]$DataDir = "",
@@ -11,12 +12,16 @@ param(
   [string]$PasswordFile = "",
   [string]$ServiceName = "MetisAI",
   [string]$PublicUrl = "",
+  [string]$Version = "",
   [switch]$NonInteractive,
   [switch]$SkipRuntimeInstall,
   [switch]$Native,
   [switch]$ReplaceExisting,
   [switch]$DryRun,
-  [switch]$Help
+  [switch]$Help,
+  [switch]$Yes,
+  [switch]$KeepData,
+  [switch]$RemoveData
 )
 
 $ErrorActionPreference = "Stop"
@@ -30,10 +35,28 @@ This script must be invoked with powershell -File. Do not pipe it to iex;
 use install.ps1 for the one-line installer.
 
 Options: -InstallDir, -DataDir, -AgentCwd, -Port, -Host, -McpPort,
-         -Username, -Password, -PasswordFile, -ServiceName, -PublicUrl
+         -Username, -Password, -PasswordFile, -ServiceName, -PublicUrl, -Version
          -NonInteractive, -SkipRuntimeInstall, -Native, -ReplaceExisting, -DryRun
+         uninstall [-Yes] [-KeepData] [-InstallDir DIR]
 "@ | Write-Host
   exit 0
+}
+if ($Command -eq "uninstall") {
+  $selfDir = Split-Path -Parent $MyInvocation.MyCommand.Path
+  $uninstaller = Join-Path $selfDir "uninstall.ps1"
+  if (-not (Test-Path -LiteralPath $uninstaller)) {
+    $uninstaller = Join-Path (Join-Path $selfDir "install") "uninstall.ps1"
+  }
+  if (-not (Test-Path -LiteralPath $uninstaller)) { throw "Could not find uninstall.ps1 next to windows.ps1." }
+  $forward = @()
+  if ($InstallDir) { $forward += @("-InstallDir", $InstallDir) }
+  if ($ServiceName) { $forward += @("-ServiceName", $ServiceName) }
+  if ($KeepData) { $forward += "-KeepData" }
+  if ($RemoveData) { $forward += "-RemoveData" }
+  if ($DryRun) { $forward += "-DryRun" }
+  if ($Yes) { $forward += "-Yes" }
+  & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $uninstaller @forward
+  exit $LASTEXITCODE
 }
 if (-not $RepoUrl) { $RepoUrl = "https://github.com/f1shyondrugs/metis-ai.git" }
 if (-not $InstallDir) {
@@ -300,8 +323,9 @@ if ($existingServiceDir) {
     Write-Host "  directory: $existingServiceDir"
     Write-Host "[u] Upgrade that install"
     Write-Host "[r] Replace it (uninstall, keep data, then continue)"
+    Write-Host "[n] Uninstall and exit (keeps data)"
     Write-Host "[a] Abort"
-    $choice = Read-Host "Choice [u/r/a]"
+    $choice = Read-Host "Choice [u/r/n/a]"
   }
   switch -Regex ($choice) {
     '^[rR]$' {
@@ -318,8 +342,15 @@ if ($existingServiceDir) {
       Write-Host "Aborted."
       exit 0
     }
+    '^[nN]$' {
+      $self = $MyInvocation.MyCommand.Path
+      $forward = @("uninstall", "-InstallDir", $existingServiceDir, "-Yes", "-KeepData")
+      if ($DryRun) { $forward += "-DryRun" }
+      & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $self @forward
+      exit $LASTEXITCODE
+    }
     default {
-      throw "Metis AI is already installed as $serviceName-app in $existingServiceDir. Re-run and choose upgrade/replace, or pass -ReplaceExisting."
+      throw "Metis AI is already installed as $serviceName-app in $existingServiceDir. Re-run and choose upgrade/replace/uninstall, or pass -ReplaceExisting."
     }
   }
 }
@@ -360,6 +391,13 @@ if (Test-Path (Join-Path $InstallDir ".git")) {
 } else {
   New-Item -ItemType Directory -Force -Path (Split-Path $InstallDir) | Out-Null
   git clone $RepoUrl $InstallDir
+}
+if ($Version -and $Version -ne "latest") {
+  if ($Version -notmatch '^v\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?$') {
+    throw "Version must be latest or a v-prefixed SemVer tag, for example v1.0.0."
+  }
+  git -C $InstallDir fetch --tags --force
+  git -C $InstallDir checkout --force $Version
 }
 Restore-StashedData $dataDir
 

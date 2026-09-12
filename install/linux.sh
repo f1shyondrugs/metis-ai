@@ -122,6 +122,7 @@ usage() {
 Usage:
   linux.sh                                  Install Metis AI without account prompts
   linux.sh --non-interactive Install without prompts (default)
+  linux.sh uninstall [options]              Uninstall Metis AI (same flags as uninstall.sh)
 
 Options:
   --install-dir DIR       Application checkout (default: ~/metis-ai)
@@ -132,6 +133,7 @@ Options:
   --mcp-port PORT         MCP gateway port (default: 8787)
      --service-name NAME     systemd service prefix (default: metis-ai)
   --public-url URL        URL shown to users
+  --version TAG          Checkout a release tag such as v1.0.0 after clone/pull
   --native                Force Node.js + systemd instead of Docker
   --replace-existing     Uninstall a detected existing install (keeps data), then continue
   --non-interactive       Never read prompts; all values come from arguments/defaults
@@ -154,6 +156,59 @@ public_url=""
 force_native=0
 replace_existing=0
 REPLACE_DATA_STASH=""
+release_version=""
+
+if [[ "${1:-}" == "uninstall" ]]; then
+  shift
+  uninstall_dir=""
+  uninstall_svc="$service_name"
+  args=("$@")
+  i=0
+  uninstall_help=0
+  while [[ $i -lt ${#args[@]} ]]; do
+    case "${args[$i]}" in
+      --install-dir)
+        uninstall_dir="${args[$((i+1))]:-}"
+        i=$((i+2))
+        ;;
+      --service-name)
+        uninstall_svc="${args[$((i+1))]:-$uninstall_svc}"
+        i=$((i+2))
+        ;;
+      -h|--help)
+        uninstall_help=1
+        i=$((i+1))
+        ;;
+      *)
+        i=$((i+1))
+        ;;
+    esac
+  done
+  if (( uninstall_help == 0 )); then
+    if [[ -z "$uninstall_dir" ]]; then
+      if ! command -v systemctl >/dev/null 2>&1 || ! systemctl cat "${uninstall_svc}.service" >/dev/null 2>&1; then
+        die "Metis AI is not installed as ${uninstall_svc}.service. Nothing to uninstall."
+      fi
+    elif [[ ! -e "$uninstall_dir/.metis-ai-install.json" && ! -e "$uninstall_dir/.env" && ! -e "$uninstall_dir/server.mjs" ]]; then
+      die "No Metis AI install found at $uninstall_dir. Nothing to uninstall."
+    fi
+  fi
+  self_dir="$(cd "$(dirname "$0")" && pwd)"
+  uninstall_script=""
+  if [[ -f "$self_dir/uninstall.sh" ]]; then
+    uninstall_script="$self_dir/uninstall.sh"
+  elif [[ -f "$self_dir/install/uninstall.sh" ]]; then
+    uninstall_script="$self_dir/install/uninstall.sh"
+  else
+    base="${METIS_AI_INSTALL_BASE:-https://raw.githubusercontent.com/f1shyondrugs/metis-ai/master}"
+    base="${base%/}"
+    uninstall_script="$(mktemp "${TMPDIR:-/tmp}/metis-ai-uninstall.XXXXXX")"
+    curl -fsSL "$base/install/uninstall.sh" -o "$uninstall_script" || die "failed to download the Metis AI uninstaller."
+    chmod u+x "$uninstall_script"
+  fi
+  exec /bin/bash "$uninstall_script" "$@"
+fi
+
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --install-dir) [[ $# -ge 2 ]] || die "--install-dir requires a value"; install_dir="$2"; shift 2 ;;
@@ -164,6 +219,7 @@ while [[ $# -gt 0 ]]; do
     --mcp-port) [[ $# -ge 2 ]] || die "--mcp-port requires a value"; mcp_port="$2"; shift 2 ;;
              --service-name) [[ $# -ge 2 ]] || die "--service-name requires a value"; service_name="$2"; shift 2 ;;
     --public-url) [[ $# -ge 2 ]] || die "--public-url requires a value"; public_url="$2"; shift 2 ;;
+    --version) [[ $# -ge 2 ]] || die "--version requires a value"; release_version="$2"; shift 2 ;;
     --native) force_native=1; shift ;;
     --replace-existing) replace_existing=1; shift ;;
     --non-interactive) non_interactive=1; shift ;;
@@ -198,6 +254,9 @@ public_url="${public_url:-http://${public_host}:${port}}"
 [[ "$port" =~ ^[0-9]+$ && "$port" -ge 1 && "$port" -le 65535 ]] || die "Web port must be a number between 1 and 65535."
 [[ "$mcp_port" =~ ^[0-9]+$ && "$mcp_port" -ge 1 && "$mcp_port" -le 65535 ]] || die "MCP port must be a number between 1 and 65535."
 [[ "$service_name" =~ ^[A-Za-z0-9][A-Za-z0-9_-]*$ ]] || die "Service name may contain letters, numbers, underscores and hyphens."
+if [[ -n "$release_version" && "$release_version" != "latest" ]]; then
+  [[ "$release_version" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]] || die "Version must be latest or a v-prefixed SemVer tag, for example v1.0.0."
+fi
 
 existing_service_state=""
 existing_service_dir=""
@@ -217,6 +276,7 @@ Dry run; no files or services will be changed.
   mcp port:      $mcp_port
   service name:  $service_name
   public url:    $public_url
+  version:       ${release_version:-current branch}
   native:        $force_native
   existing:      ${existing_service_state:-none}${existing_service_dir:+ at $existing_service_dir}
 EOF
@@ -451,8 +511,8 @@ if [[ -n "$existing_service_state" ]]; then
     printf 'Existing Metis AI detected.\n'
     printf '  service:   %s.service (%s)\n' "$service_name" "$existing_service_state"
     printf '  directory: %s\n' "${existing_service_dir:-unknown}"
-    printf '[u] Upgrade that install\n[r] Replace it (uninstall, keep data, then continue)\n[a] Abort\n'
-    read_tty_line "Choice [u/r/a]: "
+    printf '[u] Upgrade that install\n[r] Replace it (uninstall, keep data, then continue)\n[n] Uninstall and exit (keeps data)\n[a] Abort\n'
+    read_tty_line "Choice [u/r/n/a]: "
     choice="$REPLY"
   fi
   case "$choice" in
@@ -476,8 +536,17 @@ if [[ -n "$existing_service_state" ]]; then
       printf 'Aborted.\n'
       exit 0
       ;;
+    n|N)
+      install_dir="${existing_service_dir:-$install_dir}"
+      [[ -n "$install_dir" && "$install_dir" != "/" && "$install_dir" != "$HOME" ]] || die "Could not resolve the install directory to uninstall."
+      if (( dry_run )); then
+        printf 'Would uninstall Metis AI at %s (data kept) and exit.\n' "$install_dir"
+        exit 0
+      fi
+      exec /bin/bash "$0" uninstall --install-dir "$install_dir" --service-name "$service_name" --yes --keep-data
+      ;;
     *)
-      die "Metis AI is already installed as ${service_name}.service (${existing_service_state}) in ${existing_service_dir:-an unknown directory}. Re-run and choose upgrade/replace, or pass --replace-existing."
+      die "Metis AI is already installed as ${service_name}.service (${existing_service_state}) in ${existing_service_dir:-an unknown directory}. Re-run and choose upgrade/replace/uninstall, or pass --replace-existing."
       ;;
   esac
 fi
@@ -529,6 +598,10 @@ elif [[ -e "$install_dir" && -n "$(ls -A "$install_dir" 2>/dev/null)" ]]; then
 else
   mkdir -p "$(dirname "$install_dir")"
   git clone "$REPO_URL" "$install_dir"
+fi
+if [[ -n "$release_version" && "$release_version" != "latest" ]]; then
+  git -C "$install_dir" fetch --tags --force
+  git -C "$install_dir" checkout --force "$release_version"
 fi
 
 restore_stashed_data "$data_dir"
@@ -667,7 +740,8 @@ EOF
   write_unit "${service_name}-worker.service" "Metis AI worker" "$install_dir/node_modules/tsx/dist/cli.mjs" "$install_dir/worker.ts"
   write_unit "${service_name}-mcp.service" "Metis AI MCP gateway" "$install_dir/lib/mcp-core/gateway-core.mjs"
   sudo systemctl daemon-reload
-  sudo systemctl enable --now "${service_name}.service" "${service_name}-worker.service" "${service_name}-mcp.service"
+  sudo systemctl enable "${service_name}.service" "${service_name}-worker.service" "${service_name}-mcp.service"
+  sudo systemctl restart "${service_name}.service" "${service_name}-worker.service" "${service_name}-mcp.service"
 fi
 fi
 if command -v curl >/dev/null 2>&1; then

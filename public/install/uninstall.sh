@@ -40,7 +40,7 @@ done
 if [[ -z "$INSTALL_DIR" ]]; then
   INSTALL_DIR="$(discover_install_dir "$SERVICE_NAME" || true)"
 fi
-[[ -n "$INSTALL_DIR" ]] || { echo "Could not detect the install directory from ${SERVICE_NAME}.service. Pass --install-dir DIR." >&2; exit 2; }
+[[ -n "$INSTALL_DIR" ]] || { echo "Metis AI is not installed as ${SERVICE_NAME}.service. Nothing to uninstall. Pass --install-dir DIR if files are leftover." >&2; exit 2; }
 INSTALL_DIR="${INSTALL_DIR/#\~/$HOME}"
 MANIFEST="$INSTALL_DIR/.metis-ai-install.json"
 SERVICE="$SERVICE_NAME"

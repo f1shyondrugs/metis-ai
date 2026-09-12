@@ -23,7 +23,7 @@ if (-not $InstallDir) {
     } catch {}
   }
 }
-if (-not $InstallDir) { throw "Could not detect the install directory from startup entries. Pass -InstallDir DIR." }
+if (-not $InstallDir) { throw "Metis AI is not installed (no startup entry for $ServiceName). Nothing to uninstall. Pass -InstallDir DIR if files are leftover." }
 $manifestPath = Join-Path $InstallDir ".metis-ai-install.json"
 $manifest = $null
 if (Test-Path $manifestPath) {

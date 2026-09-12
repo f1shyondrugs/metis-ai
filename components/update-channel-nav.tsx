@@ -168,7 +168,6 @@ export function UpdateSettingsPanel({
   const [busy, setBusy] = useState(false);
   const [preparing, setPreparing] = useState(false);
   const [jobId, setJobId] = useState<string | null>(null);
-  const [prepared, setPrepared] = useState(false);
   const [installerUrl, setInstallerUrl] = useState<string | null>(null);
   const [message, setMessage] = useState("");
   const [schedule, setSchedule] = useState<UpdateScheduleState | null>(null);
@@ -235,17 +234,19 @@ export function UpdateSettingsPanel({
         const job = (await response.json().catch(() => ({}))) as UpdateJobState & { error?: string };
         if (!active) return;
         if (!response.ok) {
+          if (response.status === 404) {
+            setMessage("The installer is restarting Metis. Keep this page open.");
+            return;
+          }
           window.localStorage.removeItem(UPDATE_JOB_STORAGE_KEY);
           setPreparing(false);
           setJobId(null);
-          setMessage(job.error || `Could not restore update preparation (HTTP ${response.status}).`);
+          setMessage(job.error || `Could not restore update status (HTTP ${response.status}).`);
         } else if (job.status === "ready") {
           window.localStorage.removeItem(UPDATE_JOB_STORAGE_KEY);
           setPreparing(false);
-          setPrepared(false);
           setJobId(null);
-          setMessage(`Update built in ${job.result?.preparedSlot || "the inactive slot"}. Activating it now…`);
-          void activateUpdate();
+          setMessage(`Installer finished${job.result?.tag ? ` (${job.result.tag})` : ""}. Metis will come back after the service restart.`);
         } else if (job.status === "failed") {
           window.localStorage.removeItem(UPDATE_JOB_STORAGE_KEY);
           setPreparing(false);
@@ -303,40 +304,15 @@ export function UpdateSettingsPanel({
         setPreparing(true);
         setJobId(result.jobId);
         window.localStorage.setItem(UPDATE_JOB_STORAGE_KEY, result.jobId);
-        setMessage(result.message || "Update preparation started in the background.");
+        setMessage(result.message || "Installer update started. The updating screen stays up until Metis restarts.");
         return;
       }
-      setPrepared(Boolean(result.requiresActivation));
       setInstallerUrl(result.status === "external-installer" ? result.installerUrl || null : null);
-      setMessage(result.message || "Update prepared. Activate it to switch production slots.");
+      setMessage(result.message || "Installer update started.");
     } catch (error) {
       window.localStorage.removeItem(UPDATE_JOB_STORAGE_KEY);
       setPreparing(false);
       setMessage(error instanceof Error ? error.message : "Update preparation failed.");
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  async function activateUpdate() {
-    setBusy(true);
-    setMessage("");
-    try {
-      const response = await fetch("/api/admin/system/update", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ action: "activate", channel, tag: channel === "releases" ? state?.latestTag : undefined }),
-      });
-      const raw = await response.text();
-      let result: { error?: string; message?: string } = {};
-      try { result = JSON.parse(raw) as typeof result; } catch { /* proxy may return plain text */ }
-      if (!response.ok) {
-        throw new Error(result.error || raw.trim() || `Update activation failed (HTTP ${response.status}).`);
-      }
-      setPrepared(false);
-      setMessage(result.message || "Update activation started.");
-    } catch (error) {
-      setMessage(error instanceof Error ? error.message : "Update activation failed.");
     } finally {
       setBusy(false);
     }
@@ -357,7 +333,7 @@ export function UpdateSettingsPanel({
     <div className="max-w-2xl space-y-6">
       <div>
         <h3 className="text-sm font-medium">Updates</h3>
-        <p className="mt-1 text-xs text-muted-foreground">Choose whether Metis follows stable releases or the latest master commits.</p>
+        <p className="mt-1 text-xs text-muted-foreground">Choose whether Metis follows stable releases or the latest master commits. Update runs the same installer as a fresh install.</p>
       </div>
       <label className="block max-w-sm text-xs font-medium" htmlFor="settings-update-channel-panel">
         Update channel
@@ -367,7 +343,6 @@ export function UpdateSettingsPanel({
           onChange={(event) => {
             const next = event.target.value as UpdateChannel;
             setChannel(next);
-            setPrepared(false);
             setInstallerUrl(null);
             setMessage("");
             window.localStorage.setItem(STORAGE_KEY, next);
@@ -413,7 +388,7 @@ export function UpdateSettingsPanel({
       <div className="space-y-3 border-t border-border/60 pt-5">
         <div>
           <h4 className="text-sm font-medium">Automatic updates</h4>
-          <p className="mt-1 text-xs text-muted-foreground">Check stable releases daily and prepare them at a time you choose. Metis announces 10, 5 and 1 minute before the update.</p>
+          <p className="mt-1 text-xs text-muted-foreground">Check stable releases daily and run the installer at a time you choose. Metis announces 10, 5 and 1 minute before the update.</p>
         </div>
         <div className="flex flex-wrap items-end gap-3">
           <label className="text-xs font-medium">Time<input type="time" value={scheduleTime} onChange={(event) => setScheduleTime(event.target.value)} className="mt-1 block h-9 rounded-md border border-input bg-background px-2 text-sm" /></label>
@@ -423,7 +398,7 @@ export function UpdateSettingsPanel({
         {schedule?.nextRunAt ? <p className="text-xs text-muted-foreground">Next check: {new Date(schedule.nextRunAt).toLocaleString()}</p> : null}
       </div>
       {available && channel === "commits" ? (
-        <p className="text-xs text-muted-foreground">This builds the current master commit in the inactive slot, then activates it after the build succeeds. Master commits may be buggy or broken.</p>
+        <p className="text-xs text-muted-foreground">This runs the installer against the current checkout (git pull on master, then rebuild and restart). Master commits may be buggy or broken.</p>
       ) : null}
     </div>
   );

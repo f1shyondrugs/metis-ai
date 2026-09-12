@@ -1,6 +1,3 @@
-import { readFile } from "node:fs/promises";
-import { execFile } from "node:child_process";
-import { promisify } from "node:util";
 import { getAuthenticatedUserId, isAuthenticated } from "@/lib/auth";
 import { config } from "@/lib/config";
 import { isHostAdmin } from "@/lib/user-access";
@@ -8,15 +5,7 @@ import {
   checkForUpdate,
   type UpdateChannel,
 } from "@/lib/github-releases";
-import { getUpdateJob, startNativeCommitUpdateJob, startNativeUpdateJob } from "@/lib/update-job";
-import { activateProductionSlot } from "@/lib/production-slot";
-
-const execFileAsync = promisify(execFile);
-const DOCKER_INSTALLER_BASE = "https://github.com/f1shyondrugs/metis-ai/releases/download";
-
-function dockerInstallerUrl(tag: string) {
-  return `${DOCKER_INSTALLER_BASE}/${encodeURIComponent(tag)}/metis-docker-install.sh`;
-}
+import { getUpdateJob, startInstallerUpdateJob } from "@/lib/update-job";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -83,63 +72,32 @@ export async function POST(req: Request) {
     if (channel === "commits" && !update.latestCommit) {
       throw new Error("GitHub did not return a master commit SHA.");
     }
-    if (config.docker && channel === "releases") {
-      const installerUrl = dockerInstallerUrl(update.latestTag);
-      return Response.json({
-        status: "external-installer",
-        latestTag: update.latestTag,
-        installerUrl,
-        installCommand: `curl -fsSL ${installerUrl} -o metis-docker-install.sh && bash metis-docker-install.sh --version ${update.latestTag}`,
-        message: "This Docker installation must be upgraded with the verified release installer. Persistent data and the workspace are preserved.",
-      });
-    }
-
-    const activeSlot = process.env.NEXT_DIST_DIR === ".next-a" ? ".next-a" : ".next-b";
-    const inactiveSlot = activeSlot === ".next-a" ? ".next-b" : ".next-a";
-    if (channel === "commits") {
-      if (!update.latestCommit) throw new Error("No master commit is available.");
-      if (action === "activate") {
-        const preparedManifest = JSON.parse(await readFile(`${config.root}/${inactiveSlot}/release-manifest.json`, "utf8")) as { commit?: string };
-        if (preparedManifest.commit !== update.latestCommit) return Response.json({ error: "The selected master commit has not been prepared in the inactive slot." }, { status: 409 });
-        await activateProductionSlot(config.root, inactiveSlot);
-        await execFileAsync("systemctl", ["restart", "--no-block", `${config.serviceName}.service`, `${config.serviceName}-worker.service`, `${config.serviceName}-mcp.service`], { timeout: 30_000, maxBuffer: 1 * 1024 * 1024 });
-        return Response.json({ ok: true, status: "activating", latestCommit: update.latestCommit, message: "The master commit is being activated. Metis will restart on the new development build." }, { status: 202 });
-      }
-      const job = await startNativeCommitUpdateJob(config.root, { sha: update.latestCommit }, activeSlot);
-      return Response.json({ ok: true, status: "preparing", jobId: job.jobId, latestCommit: update.latestCommit, message: "Master commit preparation started. Metis is temporarily unavailable while the development build is prepared." }, { status: 202 });
-    }
     if (action === "activate") {
-      const preparedManifest = JSON.parse(await readFile(
-        `${config.root}/${inactiveSlot}/release-manifest.json`,
-        "utf8",
-      )) as { tag?: string };
-      if (preparedManifest.tag !== update.latestTag) {
-        return Response.json({ error: "The verified release has not been prepared in the inactive slot." }, { status: 409 });
-      }
-      await activateProductionSlot(config.root, inactiveSlot);
-      await execFileAsync("systemctl", [
-        "restart",
-        "--no-block",
-        `${config.serviceName}.service`,
-        `${config.serviceName}-worker.service`,
-        `${config.serviceName}-mcp.service`,
-      ], { timeout: 30_000, maxBuffer: 1 * 1024 * 1024 });
       return Response.json({
         ok: true,
         status: "activating",
         latestTag: update.latestTag,
-        message: "The verified release is being activated. The services will restart and health checks will run on the new slot.",
+        latestCommit: update.latestCommit,
+        message: "Updates now run the installer in one step. If an update is already running, keep this page open.",
       }, { status: 202 });
     }
 
-    if (!update.release) throw new Error("The selected release channel did not return a stable release.");
-    const job = await startNativeUpdateJob(config.root, update.release, activeSlot);
+    const job = await startInstallerUpdateJob({
+      root: config.root,
+      docker: config.docker,
+      channel,
+      tag: channel === "releases" ? update.latestTag : undefined,
+      commit: update.latestCommit,
+      serviceName: config.serviceName,
+      dataDir: config.dataDir,
+    });
     return Response.json({
       ok: true,
       status: "preparing",
       jobId: job.jobId,
       latestTag: update.latestTag,
-      message: "Update preparation started in the background. This can take several minutes; you can keep using Metis while it runs.",
+      latestCommit: update.latestCommit,
+      message: "Installer update started. Metis will show the updating screen until the installer finishes and restarts the services.",
     }, { status: 202 });
   } catch (error) {
     const detail = error && typeof error === "object" && "stderr" in error

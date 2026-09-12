@@ -159,13 +159,13 @@ test("installers detect an existing Metis install from OS services", () => {
   const windows = readFileSync(path.join(root, "install", "windows.ps1"), "utf8");
   const docker = readFileSync(path.join(root, "public", "install", "docker.sh"), "utf8");
   assert.match(linux, /systemctl cat "\$\{service_name\}\.service"/);
-  assert.match(linux, /Choice \[u\/r\/a\]/);
+  assert.match(linux, /Choice \[u\/r\/n\/a\]/);
   assert.match(linux, /--replace-existing/);
   assert.match(linux, /already installed as \$\{service_name\}\.service/);
   assert.match(macos, /LaunchAgents\/\$\{service_name\}-app\.plist/);
-  assert.match(macos, /Choice \[u\/r\/a\]/);
+  assert.match(macos, /Choice \[u\/r\/n\/a\]/);
   assert.match(windows, /CurrentVersion\\Run/);
-  assert.match(windows, /Choice \[u\/r\/a\]/);
+  assert.match(windows, /Choice \[u\/r\/n\/a\]/);
   assert.match(docker, /systemctl cat metis-ai\.service/);
   assert.match(docker, /--replace-existing/);
   assert.doesNotMatch(linux, /if \[\[ -f "\$dir\/uninstall\.sh" \]\]/);
@@ -307,4 +307,49 @@ test("README documents the bootstrap one-liner rather than curling platform scri
   assert.doesNotMatch(readme, /install\/linux\.sh \| bash/);
   assert.doesNotMatch(readme, /install\/macos\.sh \| bash/);
   assert.doesNotMatch(readme, /install\/windows\.ps1 \| iex/);
+});
+
+test("unix bootstrap routes uninstall to the platform uninstaller", () => {
+  const bootstrap = readFileSync(path.join(root, "install.sh"), "utf8");
+  const published = readFileSync(path.join(installerDir, "install.sh"), "utf8");
+  for (const source of [bootstrap, published]) {
+    assert.match(source, /uninstall --yes --keep-data/);
+    assert.match(source, /\[\[ "\$\{1:-\}" == "uninstall" \]\]/);
+    assert.match(source, /install\/macos\.sh "\$@"/);
+    assert.match(source, /install\/linux\.sh "\$@"/);
+  }
+  const windows = readFileSync(path.join(root, "install.ps1"), "utf8");
+  assert.match(windows, /ToLowerInvariant\(\) -eq "uninstall"/);
+  assert.match(windows, /install\/windows\.ps1/);
+});
+
+test("uninstall is refused when Metis is not installed", () => {
+  const linux = readFileSync(path.join(root, "install", "linux.sh"), "utf8");
+  const macos = readFileSync(path.join(root, "install", "macos.sh"), "utf8");
+  const uninstall = readFileSync(path.join(root, "install", "uninstall.sh"), "utf8");
+  assert.match(linux, /Nothing to uninstall/);
+  assert.match(linux, /\[n\] Uninstall and exit/);
+  assert.match(macos, /Nothing to uninstall/);
+  assert.match(macos, /\[n\] Uninstall and exit/);
+  assert.match(uninstall, /Metis AI is not installed as \$\{SERVICE_NAME\}\.service/);
+});
+
+test("platform installers accept uninstall and pin a release with --version", () => {
+  const linux = readFileSync(path.join(root, "install", "linux.sh"), "utf8");
+  const macos = readFileSync(path.join(root, "install", "macos.sh"), "utf8");
+  const windows = readFileSync(path.join(root, "install", "windows.ps1"), "utf8");
+  for (const source of [linux, macos]) {
+    assert.match(source, /linux\.sh uninstall|macos\.sh uninstall/);
+    assert.match(source, /\[\[ "\$\{1:-\}" == "uninstall" \]\]/);
+    assert.match(source, /--version\) \[\[ \$# -ge 2 \]\]/);
+    assert.match(source, /git -C "\$install_dir" checkout --force "\$release_version"/);
+  }
+  assert.match(linux, /sudo systemctl enable "\$\{service_name\}\.service"/);
+  assert.match(linux, /sudo systemctl restart "\$\{service_name\}\.service"/);
+  const enableAt = linux.indexOf("sudo systemctl enable \"${service_name}.service\"");
+  const restartAt = linux.indexOf("sudo systemctl restart \"${service_name}.service\"");
+  assert.ok(enableAt >= 0 && restartAt > enableAt, "linux must restart units after enable so upgrades load the new build");
+  assert.match(windows, /\$Command -eq "uninstall"/);
+  assert.match(windows, /\[string\]\$Version/);
+  assert.match(windows, /git -C \$InstallDir checkout --force \$Version/);
 });

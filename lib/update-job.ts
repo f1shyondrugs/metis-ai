@@ -1,14 +1,14 @@
 import { randomUUID } from "node:crypto";
-import type { GithubRelease } from "@/lib/github-releases";
-import { prepareNativeCommitUpdate, prepareNativeReleaseUpdate } from "@/lib/github-releases";
+import { runInstallerUpdate, type InstallerUpdateInput } from "@/lib/installer-update";
 import { clearMaintenanceState, setMaintenanceState } from "@/lib/maintenance-state";
 
 type UpdateJobResult = {
   tag: string;
   commit?: string;
-  activeSlot: ".next-a" | ".next-b";
-  preparedSlot: ".next-a" | ".next-b";
+  method?: "installer";
   asset: string;
+  activeSlot?: ".next-a" | ".next-b";
+  preparedSlot?: ".next-a" | ".next-b";
 };
 
 export type UpdateJob = {
@@ -23,13 +23,16 @@ export type UpdateJob = {
 
 const jobs = new Map<string, UpdateJob>();
 
+const INSTALLER_REASON = "Metis is being updated with the same installer used for a fresh install. Keep this page open.";
+
 async function startUpdateJob(
   prepare: (logger: (message: string) => void) => Promise<UpdateJobResult>,
+  reason = INSTALLER_REASON,
 ) {
   const job: UpdateJob = { jobId: randomUUID(), status: "preparing", startedAt: new Date().toISOString(), logs: ["Update job created."] };
   const log = (message: string) => { job.logs.push(`${new Date().toISOString()} ${message}`); };
   log("Maintenance mode enabled.");
-  await setMaintenanceState(job.jobId, "Metis is being updated. The application is temporarily unavailable while the inactive production slot is built.");
+  await setMaintenanceState(job.jobId, reason);
   jobs.set(job.jobId, job);
   void prepare(log).then(async (result) => {
     job.status = "ready";
@@ -47,17 +50,10 @@ async function startUpdateJob(
   return job;
 }
 
-export function startNativeUpdateJob(root: string, release: GithubRelease, activeSlot: ".next-a" | ".next-b") {
+export function startInstallerUpdateJob(input: InstallerUpdateInput & { commit?: string }) {
   return startUpdateJob(async (log) => {
-    const result = await prepareNativeReleaseUpdate(root, release, activeSlot, fetch, log);
-    return { ...result, preparedSlot: result.preparedSlot as ".next-a" | ".next-b" };
-  });
-}
-
-export function startNativeCommitUpdateJob(root: string, commit: { sha: string }, activeSlot: ".next-a" | ".next-b") {
-  return startUpdateJob(async (log) => {
-    const result = await prepareNativeCommitUpdate(root, commit, activeSlot, fetch, log);
-    return { ...result, preparedSlot: result.preparedSlot as ".next-a" | ".next-b" };
+    const result = await runInstallerUpdate(input, log);
+    return { ...result, commit: input.commit };
   });
 }
 

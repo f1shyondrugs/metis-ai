@@ -1,12 +1,7 @@
-import { execFile } from "node:child_process";
-import { promisify } from "node:util";
 import { getDatabase } from "@/lib/sqlite";
 import { config } from "@/lib/config";
 import { checkForUpdate } from "@/lib/github-releases";
-import { getUpdateJob, startNativeUpdateJob } from "@/lib/update-job";
-import { activateProductionSlot } from "@/lib/production-slot";
-
-const execFileAsync = promisify(execFile);
+import { getUpdateJob, startInstallerUpdateJob } from "@/lib/update-job";
 
 export type UpdateSchedule = {
   enabled: boolean;
@@ -75,19 +70,21 @@ export function startUpdateScheduler() {
     try {
       saveUpdateSchedule({ lastRunKey: runKey });
       const update = await checkForUpdate(config.root, fetch, "releases");
-      if (update.updateAvailable && update.release && !config.docker) {
-        const activeSlot = process.env.NEXT_DIST_DIR === ".next-a" ? ".next-a" : ".next-b";
-        const job = await startNativeUpdateJob(config.root, update.release, activeSlot);
+      if (update.updateAvailable) {
+        const job = await startInstallerUpdateJob({
+          root: config.root,
+          docker: config.docker,
+          channel: "releases",
+          tag: update.latestTag,
+          serviceName: config.serviceName,
+          dataDir: config.dataDir,
+        });
         const deadline = Date.now() + 40 * 60_000;
         while (Date.now() < deadline) {
           await new Promise((resolve) => setTimeout(resolve, 2_000));
           const current = getUpdateJob(job.jobId);
-          if (current?.status === "failed") throw new Error(current.error || "Automatic update preparation failed.");
-          if (current?.status === "ready") {
-            await activateProductionSlot(config.root, activeSlot === ".next-a" ? ".next-b" : ".next-a");
-            await execFileAsync("systemctl", ["restart", "--no-block", `${config.serviceName}.service`, `${config.serviceName}-worker.service`, `${config.serviceName}-mcp.service`], { timeout: 30_000 });
-            break;
-          }
+          if (current?.status === "failed") throw new Error(current.error || "Automatic installer update failed.");
+          if (current?.status === "ready") break;
         }
       }
     } finally {

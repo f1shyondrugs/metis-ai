@@ -107,6 +107,12 @@ from a pipe.
 /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/f1shyondrugs/metis-ai/master/install.sh)"
 ```
 
+Uninstall with the same bootstrap:
+
+```bash
+/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/f1shyondrugs/metis-ai/master/install.sh)" -- uninstall --yes --keep-data
+```
+
 The same command works on macOS and Linux. Do not use `curl | bash` against
 `linux.sh` or `macos.sh` directly.
 
